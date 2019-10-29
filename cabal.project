@@ -1,0 +1,4 @@
+packages: .
+
+package quad
+  ghc-options: -Wall
