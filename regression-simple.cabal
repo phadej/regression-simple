@@ -4,7 +4,7 @@ version:       0.1
 synopsis:      Simple linear and quadratic regression
 category:      Math
 description:
-  A simple module with
+  A simple package with a module for
   .
   * linear and quadratic regression
   .

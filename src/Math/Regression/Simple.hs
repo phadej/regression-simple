@@ -24,7 +24,7 @@ module Math.Regression.Simple (
     M33 (..),
     -- * Auxiliary classes
     Foldable' (..),
-    HasDoublePair (..),
+    IsDoublePair (..),
     ) where
 
 import Data.Complex (Complex (..))
@@ -305,7 +305,7 @@ inv3 m@(M33 a b c
 -- >>> linear input2
 -- V2 2.0063237774030345 0.8868465430016883
 --
-linear :: (Foldable' xs x, HasDoublePair x) => xs -> V2
+linear :: (Foldable' xs x, IsDoublePair x) => xs -> V2
 linear data_ = mult (inv2 (M22 x n x2 x)) (V2 y xy)
   where
     K2 n' (V2 x _) (V2 x2 _) (V2 y _) (V2 xy _) = kahan2 data_
@@ -334,7 +334,7 @@ linear data_ = mult (inv2 (M22 x n x2 x)) (V2 y xy)
 -- >>> quadratic input3
 -- V3 1.0 0.0 1.999999999999993
 --
-quadratic :: (Foldable' xs x, HasDoublePair x) => xs -> V3
+quadratic :: (Foldable' xs x, IsDoublePair x) => xs -> V3
 quadratic data_ = mult (inv3 (M33 x2 x n x3 x2 x x4 x3 x2)) (V3 y xy x2y)
   where
     K3 n' (V2 x _) (V2 x2 _) (V2 x3 _) (V2 x4 _) (V2 y _) (V2 xy _) (V2 x2y _) = kahan3 data_
@@ -347,7 +347,7 @@ quadratic data_ = mult (inv3 (M33 x2 x n x3 x2 x x4 x3 x2)) (V3 y xy x2y)
 -- >>> quadraticAndLinear input2
 -- (V3 (-5.886346291028133e-3) 2.0312938469708826 0.8715454176158062,V2 2.0063237774030345 0.8868465430016883)
 --
-quadraticAndLinear :: (Foldable' xs x, HasDoublePair x) => xs -> (V3, V2)
+quadraticAndLinear :: (Foldable' xs x, IsDoublePair x) => xs -> (V3, V2)
 quadraticAndLinear data_ =
     ( mult (inv3 (M33 x2 x n x3 x2 x x4 x3 x2)) (V3 y xy x2y)
     , mult (inv2 (M22 x n x2 x)) (V2 y xy)
@@ -370,14 +370,17 @@ instance              Foldable' (V.Vector a) a where foldl' = V.foldl'
 instance U.Unbox a => Foldable' (U.Vector a) a where foldl' = U.foldl'
 
 -- | Class witnessing that @dp@ has a pair of 'Double's.
-class HasDoublePair dp where
+class IsDoublePair dp where
     withDP :: dp -> (Double -> Double -> r) -> r
+    makeDP :: Double -> Double -> dp
 
-instance HasDoublePair V2 where
+instance IsDoublePair V2 where
     withDP (V2 x y) k = k x y
+    makeDP = V2
 
-instance (a ~ Double, b ~ Double) => HasDoublePair (a, b) where
+instance (a ~ Double, b ~ Double) => IsDoublePair (a, b) where
     withDP ~(x, y) k = k x y
+    makeDP = (,)
 
 -------------------------------------------------------------------------------
 -- Kahan2
@@ -401,7 +404,7 @@ addKahan (V2 acc c) i =
         t = acc + y
     in V2 t ((t - acc) - y)
 
-kahan2 :: (Foldable' xs x, HasDoublePair x) => xs -> Kahan2
+kahan2 :: (Foldable' xs x, IsDoublePair x) => xs -> Kahan2
 kahan2 = foldl' f zeroKahan2 where
     f (K2 n x x2 y xy) uv = withDP uv $ \u v -> K2
         (succ n)
@@ -428,7 +431,7 @@ data Kahan3 = K3
 zeroKahan3 :: Kahan3
 zeroKahan3 = K3 0 zero zero zero zero zero zero zero
 
-kahan3 :: (Foldable' xs x, HasDoublePair x) => xs -> Kahan3
+kahan3 :: (Foldable' xs x, IsDoublePair x) => xs -> Kahan3
 kahan3 = foldl' f zeroKahan3 where
     f (K3 n x x2 x3 x4 y xy x2y) uv = withDP uv $ \u v ->
         let u2 = u * u
