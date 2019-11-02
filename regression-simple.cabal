@@ -11,6 +11,8 @@ description:
   * linear and quadratic zeros formula
   .
   * some 2d and 3d linear algebra
+  .
+  All specialized to @Double@.
 
 license:       BSD-3-Clause
 license-file:  LICENSE
