@@ -1,11 +1,15 @@
+{-# LANGUAGE CPP                    #-}
 {-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs                  #-}
 module Math.Regression.Simple (
     -- * Regressions
     linear,
+    linearWithErrors,
     quadratic,
+    quadraticWithErrors,
     quadraticAndLinear,
+    quadraticAndLinearWithErrors,
     -- * Operations
     Add (..),
     Eye (..),
@@ -35,6 +39,37 @@ import qualified Data.Vector.Unboxed as U
 
 -- $setup
 -- >>> :set -XTypeApplications
+--
+-- >>> import Numeric (showFFloat)
+--
+-- Don't show too much decimal digits
+--
+-- >>> showDouble x = showFFloat @Double (Just (min 5 (5 - ceiling (logBase 10 x)))) x
+-- >>> showDouble 123.456 ""
+-- "123.46"
+--
+-- >>> showDouble 1234567 ""
+-- "1234567"
+--
+-- >>> showDouble 123.4567890123456789 ""
+-- "123.46"
+--
+-- >>> showDouble 0.0000000000000012345 ""
+-- "0.00000"
+-- 
+-- >>> newtype PP a = PP a
+-- >>> class Show' a where showsPrec' :: Int -> a -> ShowS
+-- >>> instance Show' a => Show (PP a) where showsPrec d (PP x) = showsPrec' d x
+-- >>> instance Show' Double where showsPrec' d x = if x < 0 then showParen (d > 6) (showChar '-' . showDouble (negate x)) else showDouble x
+-- >>> instance (Show' a, Show' b) => Show' (a, b) where showsPrec' d (x, y) = showParen True $ showsPrec' 0 x . showString ", " . showsPrec' 0 y
+-- >>> instance Show' V2 where showsPrec' d (V2 x y)   = showParen (d > 10) $ showString "V2 " . showsPrec' 11 x . showChar ' ' . showsPrec' 11 y
+-- >>> instance Show' V3 where showsPrec' d (V3 x y z) = showParen (d > 10) $ showString "V3 " . showsPrec' 11 x . showChar ' ' . showsPrec' 11 y . showChar ' ' . showsPrec' 11 z
+--
+-- Inputs:
+-- >>> let input1 = [(0, 1), (1, 3), (2, 5)]
+-- >>> let input2 = [(0.1, 1.2), (1.3, 3.1), (1.9, 4.9), (3.0, 7.1), (4.1, 9.0)]
+-- >>> let input3 = [(0, 2), (1, 3), (2, 6), (3, 11)]
+--
 
 -------------------------------------------------------------------------------
 -- Classes
@@ -87,7 +122,7 @@ instance Inv Double where
 -- -2.0
 --
 zerosLin :: V2 -> Double
-zerosLin (V2 a b) = - b / a
+zerosLin (V2 a b) = negate (b / a)
 
 -- | Solve quadratic equation.
 --
@@ -104,6 +139,7 @@ zerosLin (V2 a b) = - b / a
 --
 -- >>> zerosQuad (V3 1 (-2) 1)
 -- Right (1.0,1.0)
+--
 zerosQuad :: V3 -> Either (Complex Double, Complex Double) (Double, Double)
 zerosQuad (V3 a b c)
     | delta < 0 = Left ((-b/da) :+ (-sqrtNDelta/da), (-b/da) :+ (sqrtNDelta/da))
@@ -298,19 +334,64 @@ inv3 m@(M33 a b c
 -- but overloaded to work with boxed and unboxed 'Vector's.
 --
 -- >>> let input1 = [(0, 1), (1, 3), (2, 5)]
--- >>> linear input1
--- V2 2.0 1.0
+-- >>> PP $ linear input1
+-- V2 2.0000 1.00000
 --
 -- >>> let input2 = [(0.1, 1.2), (1.3, 3.1), (1.9, 4.9), (3.0, 7.1), (4.1, 9.0)]
--- >>> linear input2
--- V2 2.0063237774030345 0.8868465430016883
+-- >>> PP $ linear input2
+-- V2 2.0063 0.88685
 --
 linear :: (Foldable' xs x, IsDoublePair x) => xs -> V2
-linear data_ = mult (inv2 (M22 x n x2 x)) (V2 y xy)
+linear = fst . linearWithErrors
+
+-- | Like 'linear' but also return parameters' standard errors.
+--
+-- To get confidence intervals you should multiply the errors
+-- by @quantile (studentT (n - 2)) ci'@ from @statistics@ package
+-- or similar.
+-- For big @n@ using value 1 gives 68% interval and using value 2 gives 95% confidence interval.
+-- See https://en.wikipedia.org/wiki/Student%27s_t-distribution#Table_of_selected_values
+-- (@quantile@ calculates one-sided values, you need two-sided, thus adjust @ci@ value).
+--
+-- The first input is perfect fit:
+--
+-- >>> PP $ linearWithErrors input1
+-- (V2 2.0000 1.00000, V2 0.00000 0.00000)
+--
+-- The second input is quite good:
+--
+-- >>> PP $ linearWithErrors input2
+-- (V2 2.0063 0.88685, V2 0.09550 0.23826)
+--
+-- But the third input isn't so much,
+-- standard error of a slope argument is 20%.
+--
+-- >>> let input3 = [(0, 2), (1, 3), (2, 6), (3, 11)]
+-- >>> PP $ linearWithErrors input3
+-- (V2 3.0000 1.00000, V2 0.63246 1.1832)
+--
+-- @since 0.1.1
+--
+linearWithErrors :: (Foldable' xs x, IsDoublePair x) => xs -> (V2, V2)
+linearWithErrors = linearImpl . kahan2
+
+linearImpl :: Kahan2 -> (V2, V2)
+linearImpl (K2 n' (V2 x _) (V2 x2 _) (V2 y _) (V2 y2 _) (V2 xy _)) =
+    (params, errors)
   where
-    K2 n' (V2 x _) (V2 x2 _) (V2 y _) (V2 xy _) = kahan2 data_
     n :: Double
     n = fromIntegral n'
+
+    matrix@(M22 a11 _ _ a22) = inv2 (M22 x2 x x n)
+    params@(V2 a b)          = mult matrix (V2 xy y)
+
+    errors = V2 sa sb
+
+    -- ensure that error is always non-negative.
+    -- Due rounding errors, in perfect fit situations it can be slightly negative.
+    err = max 0 (y2 - a * xy - b * y)
+    sa  = sqrt (a11 * err / (n - 2))
+    sb  = sqrt (a22 * err / (n - 2))
 
 -- | Quadratic regression.
 --
@@ -327,35 +408,78 @@ linear data_ = mult (inv2 (M22 x n x2 x)) (V2 y xy)
 -- V3 0.0 2.0 1.0
 --
 -- >>> let input2 = [(0.1, 1.2), (1.3, 3.1), (1.9, 4.9), (3.0, 7.1), (4.1, 9.0)]
--- >>> quadratic input2
--- V3 (-5.886346291028133e-3) 2.0312938469708826 0.8715454176158062
+-- >>> PP $ quadratic input2
+-- V3 (-0.00589) 2.0313 0.87155
 --
 -- >>> let input3 = [(0, 2), (1, 3), (2, 6), (3, 11)]
--- >>> quadratic input3
--- V3 1.0 0.0 1.999999999999993
+-- >>> PP $ quadratic input3
+-- V3 1.00000 0.00000 2.0000
 --
 quadratic :: (Foldable' xs x, IsDoublePair x) => xs -> V3
 quadratic data_ = mult (inv3 (M33 x2 x n x3 x2 x x4 x3 x2)) (V3 y xy x2y)
   where
-    K3 n' (V2 x _) (V2 x2 _) (V2 x3 _) (V2 x4 _) (V2 y _) (V2 xy _) (V2 x2y _) = kahan3 data_
+    K3 n' (V2 x _) (V2 x2 _) (V2 x3 _) (V2 x4 _) (V2 y _) (V2 xy _) (V2 x2y _) (V2 _y2 _) = kahan3 data_
+
     n :: Double
     n = fromIntegral n'
 
--- | Do both linear and quadratic regression in one data scan.
+-- | Like 'quadratic' but also return parameters' standard errors.
 --
--- >>> let input2 = [(0.1, 1.2), (1.3, 3.1), (1.9, 4.9), (3.0, 7.1), (4.1, 9.0)]
--- >>> quadraticAndLinear input2
--- (V3 (-5.886346291028133e-3) 2.0312938469708826 0.8715454176158062,V2 2.0063237774030345 0.8868465430016883)
+-- >>> PP $ quadraticWithErrors input2
+-- (V3 (-0.00589) 2.0313 0.87155, V3 0.09281 0.41070 0.37841)
 --
-quadraticAndLinear :: (Foldable' xs x, IsDoublePair x) => xs -> (V3, V2)
-quadraticAndLinear data_ =
-    ( mult (inv3 (M33 x2 x n x3 x2 x x4 x3 x2)) (V3 y xy x2y)
-    , mult (inv2 (M22 x n x2 x)) (V2 y xy)
-    )
+-- >>> PP $ quadraticWithErrors input3
+-- (V3 1.00000 0.00000 2.0000, V3 0.00000 0.00000 0.00000)
+--
+-- @since 0.1.1
+--
+quadraticWithErrors :: (Foldable' xs x, IsDoublePair x) => xs -> (V3, V3)
+quadraticWithErrors = quadraticImpl . kahan3
+
+quadraticImpl :: Kahan3 -> (V3, V3)
+quadraticImpl (K3 n' (V2 x _) (V2 x2 _) (V2 x3 _) (V2 x4 _) (V2 y _) (V2 xy _) (V2 x2y _) (V2 y2 _)) =
+    (params, errors)
   where
-    K3 n' (V2 x _) (V2 x2 _) (V2 x3 _) (V2 x4 _) (V2 y _) (V2 xy _) (V2 x2y _) = kahan3 data_
     n :: Double
     n = fromIntegral n'
+
+    matrix@(M33 a11 _   _
+                _   a22 _
+                _   _   a33) = inv3 (M33 x4 x3 x2 x3 x2 x x2 x n)
+
+    params@(V3 a b c) = mult matrix (V3 x2y xy y)
+
+    errors = V3 sa sb sc
+
+    err = max 0 (y2 - a * x2y - b * xy - c * y)
+    sa  = sqrt (a11 * err / (n - 3))
+    sb  = sqrt (a22 * err / (n - 3))
+    sc  = sqrt (a33 * err / (n - 3))
+
+-- | Do both linear and quadratic regression in one data scan.
+--
+-- >>> PP $ quadraticAndLinear input2
+-- (V3 (-0.00589) 2.0313 0.87155, V2 2.0063 0.88685)
+--
+quadraticAndLinear :: (Foldable' xs x, IsDoublePair x) => xs -> (V3, V2)
+quadraticAndLinear = fst . quadraticAndLinearWithErrors
+
+-- | Like 'quadraticAndLinear' but also return parameters' standard errors
+--
+-- >>> PP $ quadraticAndLinearWithErrors input2
+-- ((V3 (-0.00589) 2.0313 0.87155, V2 2.0063 0.88685), (V3 0.09281 0.41070 0.37841, V2 0.09550 0.23826))
+--
+-- @since 0.1.1
+--
+quadraticAndLinearWithErrors :: (Foldable' xs x, IsDoublePair x) => xs -> ((V3, V2), (V3, V2))
+quadraticAndLinearWithErrors data_ =
+    ((paramsQ, paramsL), (errorsQ, errorsL))
+  where
+    k3@(K3 n x x2 x3 x4 y xy x2y y2) = kahan3 data_
+    k2 = K2 n x x2 y y2 xy
+
+    (paramsL, errorsL) = linearImpl k2
+    (paramsQ, errorsQ) = quadraticImpl k3
 
 -------------------------------------------------------------------------------
 -- Input
@@ -391,11 +515,12 @@ data Kahan2 = K2
     , k2x  :: {-# UNPACK #-} !V2
     , k2x2 :: {-# UNPACK #-} !V2
     , k2y  :: {-# UNPACK #-} !V2
+    , k2y2 :: {-# UNPACK #-} !V2
     , k2xy :: {-# UNPACK #-} !V2
     }
 
 zeroKahan2 :: Kahan2
-zeroKahan2 = K2 0 zero zero zero zero
+zeroKahan2 = K2 0 zero zero zero zero zero
 
 -- | https://en.wikipedia.org/wiki/Kahan_summation_algorithm
 addKahan :: V2 -> Double -> V2
@@ -406,11 +531,12 @@ addKahan (V2 acc c) i =
 
 kahan2 :: (Foldable' xs x, IsDoublePair x) => xs -> Kahan2
 kahan2 = foldl' f zeroKahan2 where
-    f (K2 n x x2 y xy) uv = withDP uv $ \u v -> K2
+    f (K2 n x x2 y y2 xy) uv = withDP uv $ \u v -> K2
         (succ n)
         (addKahan x u)
         (addKahan x2 (u * u))
         (addKahan y v)
+        (addKahan y2 (v * v))
         (addKahan xy (u * v))
 
 -------------------------------------------------------------------------------
@@ -418,22 +544,23 @@ kahan2 = foldl' f zeroKahan2 where
 -------------------------------------------------------------------------------
 
 data Kahan3 = K3
-    { k3n  :: {-# UNPACK #-} !Int
-    , k3x  :: {-# UNPACK #-} !V2
-    , k3x2 :: {-# UNPACK #-} !V2
-    , k3x3 :: {-# UNPACK #-} !V2
-    , k3x4 :: {-# UNPACK #-} !V2
-    , k3y  :: {-# UNPACK #-} !V2
-    , k3xy :: {-# UNPACK #-} !V2
+    { k3n   :: {-# UNPACK #-} !Int
+    , k3x   :: {-# UNPACK #-} !V2
+    , k3x2  :: {-# UNPACK #-} !V2
+    , k3x3  :: {-# UNPACK #-} !V2
+    , k3x4  :: {-# UNPACK #-} !V2
+    , k3y   :: {-# UNPACK #-} !V2
+    , k3xy  :: {-# UNPACK #-} !V2
     , k3x2y :: {-# UNPACK #-} !V2
+    , ky2   :: {-# UNPACK #-} !V2
     }
 
 zeroKahan3 :: Kahan3
-zeroKahan3 = K3 0 zero zero zero zero zero zero zero
+zeroKahan3 = K3 0 zero zero zero zero zero zero zero zero
 
 kahan3 :: (Foldable' xs x, IsDoublePair x) => xs -> Kahan3
 kahan3 = foldl' f zeroKahan3 where
-    f (K3 n x x2 x3 x4 y xy x2y) uv = withDP uv $ \u v ->
+    f (K3 n x x2 x3 x4 y xy x2y y2) uv = withDP uv $ \u v ->
         let u2 = u * u
         in K3
             (succ n)
@@ -444,3 +571,4 @@ kahan3 = foldl' f zeroKahan3 where
             (addKahan y v)
             (addKahan xy (u * v))
             (addKahan x2y (u2 * v))
+            (addKahan y2 (v * v))
