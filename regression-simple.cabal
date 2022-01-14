@@ -1,6 +1,6 @@
 cabal-version:      2.4
 name:               regression-simple
-version:            0.1.1
+version:            0.2
 synopsis:           Simple linear and quadratic regression
 category:           Math
 description:
@@ -40,8 +40,13 @@ source-repository head
 
 library
   default-language: Haskell2010
+  ghc-options:      -Wall
   hs-source-dirs:   src
-  exposed-modules:  Math.Regression.Simple
+  exposed-modules:
+    Math.Regression.Simple
+    Math.Regression.Simple.LinAlg
+    Numeric.Kahan
+
   build-depends:
     , base    >=4.5      && <4.17
-    , vector  ^>=0.12.0.0
+    , deepseq
