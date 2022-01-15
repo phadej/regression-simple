@@ -256,20 +256,22 @@ instance NFData v => NFData (Fit v) where
 
 -- | Linear regression accumulator.
 data LinRegAcc = LinRegAcc
-    { lra_w  :: {-# UNPACK #-} !KBN  -- ^ \(\sum w_i\)
+    { lra_n  :: {-# UNPACK #-} !Int  -- ^ \(n\)
+    , lra_w  :: {-# UNPACK #-} !KBN  -- ^ \(\sum w_i\)
     , lra_x  :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i \)
     , lra_x2 :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i^2 \)
     , lra_y  :: {-# UNPACK #-} !KBN  -- ^ \(\sum y_i \)
     , lra_xy :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i y_i \)
     , lra_y2 :: {-# UNPACK #-} !KBN  -- ^ \(\sum y_i^2 \)
     }
+  deriving Show
 
 instance NFData LinRegAcc where
     rnf LinRegAcc {} = ()
 
 -- | All-zeroes 'LinRegAcc'.
 zeroLinRegAcc :: LinRegAcc
-zeroLinRegAcc = LinRegAcc zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN
+zeroLinRegAcc = LinRegAcc 0 zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN
 
 -- | Add a point to linreg accumulator.
 addLinReg
@@ -278,7 +280,8 @@ addLinReg
     -> Double   -- ^ y
     -> LinRegAcc
 addLinReg LinRegAcc {..} x y = LinRegAcc
-    { lra_w  = addKBN lra_w  1
+    { lra_n  = lra_n + 1
+    , lra_w  = addKBN lra_w  1
     , lra_x  = addKBN lra_x  x
     , lra_x2 = addKBN lra_x2 (x * x)
     , lra_y  = addKBN lra_y  y
@@ -294,7 +297,8 @@ addLinRegW
     -> Double   -- ^ w
     -> LinRegAcc
 addLinRegW LinRegAcc {..} x y w = LinRegAcc
-    { lra_w  = addKBN lra_w  w
+    { lra_n  = lra_n + 1
+    , lra_w  = addKBN lra_w  w
     , lra_x  = addKBN lra_x  (w * x)
     , lra_x2 = addKBN lra_x2 (w * x * x)
     , lra_y  = addKBN lra_y  (w * y)
@@ -308,7 +312,8 @@ addLinRegW LinRegAcc {..} x y w = LinRegAcc
 
 -- | Quadratic regression accumulator.
 data QuadRegAcc = QuadRegAcc
-    { qra_w   :: {-# UNPACK #-} !KBN  -- ^ \(\sum w_i\)
+    { qra_n   :: {-# UNPACK #-} !Int  -- ^ \(n\)
+    , qra_w   :: {-# UNPACK #-} !KBN  -- ^ \(\sum w_i\)
     , qra_x   :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i \)
     , qra_x2  :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i^2 \)
     , qra_x3  :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i^3 \)
@@ -318,13 +323,14 @@ data QuadRegAcc = QuadRegAcc
     , qra_x2y :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i^2 y_i \)
     , qra_y2  :: {-# UNPACK #-} !KBN  -- ^ \(\sum y_i^2 \)
     }
+  deriving Show
 
 instance NFData QuadRegAcc where
     rnf QuadRegAcc {} = ()
 
 -- | All-zeroes 'QuadRegAcc'.
 zeroQuadRegAcc :: QuadRegAcc
-zeroQuadRegAcc = QuadRegAcc zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN
+zeroQuadRegAcc = QuadRegAcc 0 zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN
 
 -- | Add a point to quadreg accumulator.
 addQuadReg
@@ -333,7 +339,8 @@ addQuadReg
     -> Double  -- ^ y
     -> QuadRegAcc
 addQuadReg QuadRegAcc {..} x y = QuadRegAcc
-    { qra_w    = addKBN qra_w   1
+    { qra_n    = qra_n + 1
+    , qra_w    = addKBN qra_w   1
     , qra_x    = addKBN qra_x   x
     , qra_x2   = addKBN qra_x2  x2
     , qra_x3   = addKBN qra_x3  (x * x2)
@@ -354,7 +361,8 @@ addQuadRegW
     -> Double  -- ^ w
     -> QuadRegAcc
 addQuadRegW QuadRegAcc {..} x y w = QuadRegAcc
-    { qra_w    = addKBN qra_w   w
+    { qra_n    = qra_n + 1
+    , qra_w    = addKBN qra_w   w
     , qra_x    = addKBN qra_x   (w * x)
     , qra_x2   = addKBN qra_x2  (w * x2)
     , qra_x3   = addKBN qra_x3  (w * x * x2)
@@ -373,7 +381,8 @@ addQuadRegW QuadRegAcc {..} x y w = QuadRegAcc
 --
 quadRegAccToLin :: QuadRegAcc -> LinRegAcc
 quadRegAccToLin QuadRegAcc {..} = LinRegAcc
-    { lra_w  = qra_w
+    { lra_n  = qra_n
+    , lra_w  = qra_w
     , lra_x  = qra_x
     , lra_x2 = qra_x2
     , lra_y  = qra_y
