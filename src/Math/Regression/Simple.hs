@@ -36,7 +36,7 @@ import Control.DeepSeq (NFData (..))
 import qualified Data.Foldable as F
 
 import Math.Regression.Simple.LinAlg
-import Numeric.Kahan
+import Numeric.KBN
 
 
 -- $setup
@@ -135,9 +135,7 @@ linearWithWeights f = linearFit . linRegAccW f
 
 -- | Calculate linear fit from 'LinRegAcc'.
 linearFit :: LinRegAcc -> Fit V2
-linearFit (LinRegAcc (Kahan n _) (Kahan x _) (Kahan x2 _) (Kahan y _) (Kahan xy _) (Kahan y2 _)) =
-    Fit params errors err
-  where
+linearFit LinRegAcc {..} = Fit params errors err where
     matrix@(SM22 a11 _ a22) = inv (SM22 x2 x n)
     params@(V2 a b)         = mult matrix (V2 xy y)
 
@@ -148,6 +146,13 @@ linearFit (LinRegAcc (Kahan n _) (Kahan x _) (Kahan x2 _) (Kahan y _) (Kahan xy 
     err = max 0 (y2 - a * xy - b * y)
     sa  = sqrt (a11 * err / (n - 2))
     sb  = sqrt (a22 * err / (n - 2))
+
+    n  = getKBN lra_w
+    x  = getKBN lra_x
+    x2 = getKBN lra_x2
+    y  = getKBN lra_y
+    xy = getKBN lra_xy
+    y2 = getKBN lra_y2
 
 linRegAcc :: F.Foldable f => (a -> (Double, Double)) -> f a -> LinRegAcc
 linRegAcc f = F.foldl' (\acc a -> case f a of (x,y) -> addLinReg acc x y) zeroLinRegAcc
@@ -198,9 +203,7 @@ quadraticWithWeights f = quadraticFit . quadRegAccW f
 
 -- | Calculate quadratic fit from 'QuadRegAcc'.
 quadraticFit :: QuadRegAcc -> Fit V3
-quadraticFit (QuadRegAcc (Kahan n _) (Kahan x _) (Kahan x2 _) (Kahan x3 _) (Kahan x4 _) (Kahan y _) (Kahan xy _) (Kahan x2y _) (Kahan y2 _)) =
-    Fit params errors err
-  where
+quadraticFit QuadRegAcc {..} = Fit params errors err where
     matrix@(SM33 a11 
                  _   a22
                  _   _   a33) = inv (SM33 x4 
@@ -215,6 +218,16 @@ quadraticFit (QuadRegAcc (Kahan n _) (Kahan x _) (Kahan x2 _) (Kahan x3 _) (Kaha
     sa  = sqrt (a11 * err / (n - 3))
     sb  = sqrt (a22 * err / (n - 3))
     sc  = sqrt (a33 * err / (n - 3))
+
+    n   = getKBN qra_w
+    x   = getKBN qra_x
+    x2  = getKBN qra_x2
+    x3  = getKBN qra_x3
+    x4  = getKBN qra_x4
+    y   = getKBN qra_y
+    xy  = getKBN qra_xy
+    x2y = getKBN qra_x2y
+    y2  = getKBN qra_y2
 
 quadRegAcc :: F.Foldable f => (a -> (Double, Double)) -> f a -> QuadRegAcc
 quadRegAcc f = F.foldl' (\acc a -> case f a of (x,y) -> addQuadReg acc x y) zeroQuadRegAcc
@@ -243,12 +256,12 @@ instance NFData v => NFData (Fit v) where
 
 -- | Linear regression accumulator.
 data LinRegAcc = LinRegAcc
-    { lra_w  :: {-# UNPACK #-} !Kahan  -- ^ \(\sum w_i\)
-    , lra_x  :: {-# UNPACK #-} !Kahan  -- ^ \(\sum x_i \)
-    , lra_x2 :: {-# UNPACK #-} !Kahan  -- ^ \(\sum x_i^2 \)
-    , lra_y  :: {-# UNPACK #-} !Kahan  -- ^ \(\sum y_i \)
-    , lra_xy :: {-# UNPACK #-} !Kahan  -- ^ \(\sum x_i y_i \)
-    , lra_y2 :: {-# UNPACK #-} !Kahan  -- ^ \(\sum y_i^2 \)
+    { lra_w  :: {-# UNPACK #-} !KBN  -- ^ \(\sum w_i\)
+    , lra_x  :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i \)
+    , lra_x2 :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i^2 \)
+    , lra_y  :: {-# UNPACK #-} !KBN  -- ^ \(\sum y_i \)
+    , lra_xy :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i y_i \)
+    , lra_y2 :: {-# UNPACK #-} !KBN  -- ^ \(\sum y_i^2 \)
     }
 
 instance NFData LinRegAcc where
@@ -256,7 +269,7 @@ instance NFData LinRegAcc where
 
 -- | All-zeroes 'LinRegAcc'.
 zeroLinRegAcc :: LinRegAcc
-zeroLinRegAcc = LinRegAcc zeroKahan zeroKahan zeroKahan zeroKahan zeroKahan zeroKahan
+zeroLinRegAcc = LinRegAcc zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN
 
 -- | Add a point to linreg accumulator.
 addLinReg
@@ -265,12 +278,12 @@ addLinReg
     -> Double   -- ^ y
     -> LinRegAcc
 addLinReg LinRegAcc {..} x y = LinRegAcc
-    { lra_w  = addKahan lra_w  1
-    , lra_x  = addKahan lra_x  x
-    , lra_x2 = addKahan lra_x2 (x * x)
-    , lra_y  = addKahan lra_y  y
-    , lra_xy = addKahan lra_xy (x * y)
-    , lra_y2 = addKahan lra_y2 (y * y)
+    { lra_w  = addKBN lra_w  1
+    , lra_x  = addKBN lra_x  x
+    , lra_x2 = addKBN lra_x2 (x * x)
+    , lra_y  = addKBN lra_y  y
+    , lra_xy = addKBN lra_xy (x * y)
+    , lra_y2 = addKBN lra_y2 (y * y)
     }
 
 -- | Add a weighted point to linreg accumulator.
@@ -281,12 +294,12 @@ addLinRegW
     -> Double   -- ^ w
     -> LinRegAcc
 addLinRegW LinRegAcc {..} x y w = LinRegAcc
-    { lra_w  = addKahan lra_w  w
-    , lra_x  = addKahan lra_x  (w * x)
-    , lra_x2 = addKahan lra_x2 (w * x * x)
-    , lra_y  = addKahan lra_y  (w * y)
-    , lra_xy = addKahan lra_xy (w * x * y)
-    , lra_y2 = addKahan lra_y2 (w * y * y)
+    { lra_w  = addKBN lra_w  w
+    , lra_x  = addKBN lra_x  (w * x)
+    , lra_x2 = addKBN lra_x2 (w * x * x)
+    , lra_y  = addKBN lra_y  (w * y)
+    , lra_xy = addKBN lra_xy (w * x * y)
+    , lra_y2 = addKBN lra_y2 (w * y * y)
     }
 
 -------------------------------------------------------------------------------
@@ -295,15 +308,15 @@ addLinRegW LinRegAcc {..} x y w = LinRegAcc
 
 -- | Quadratic regression accumulator.
 data QuadRegAcc = QuadRegAcc
-    { qra_w   :: {-# UNPACK #-} !Kahan  -- ^ \(\sum w_i\)
-    , qra_x   :: {-# UNPACK #-} !Kahan  -- ^ \(\sum x_i \)
-    , qra_x2  :: {-# UNPACK #-} !Kahan  -- ^ \(\sum x_i^2 \)
-    , qra_x3  :: {-# UNPACK #-} !Kahan  -- ^ \(\sum x_i^3 \)
-    , qra_x4  :: {-# UNPACK #-} !Kahan  -- ^ \(\sum x_i^4 \)
-    , qra_y   :: {-# UNPACK #-} !Kahan  -- ^ \(\sum y_i \)
-    , qra_xy  :: {-# UNPACK #-} !Kahan  -- ^ \(\sum x_i y_i \)
-    , qra_x2y :: {-# UNPACK #-} !Kahan  -- ^ \(\sum x_i^2 y_i \)
-    , qra_y2  :: {-# UNPACK #-} !Kahan  -- ^ \(\sum y_i^2 \)
+    { qra_w   :: {-# UNPACK #-} !KBN  -- ^ \(\sum w_i\)
+    , qra_x   :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i \)
+    , qra_x2  :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i^2 \)
+    , qra_x3  :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i^3 \)
+    , qra_x4  :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i^4 \)
+    , qra_y   :: {-# UNPACK #-} !KBN  -- ^ \(\sum y_i \)
+    , qra_xy  :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i y_i \)
+    , qra_x2y :: {-# UNPACK #-} !KBN  -- ^ \(\sum x_i^2 y_i \)
+    , qra_y2  :: {-# UNPACK #-} !KBN  -- ^ \(\sum y_i^2 \)
     }
 
 instance NFData QuadRegAcc where
@@ -311,7 +324,7 @@ instance NFData QuadRegAcc where
 
 -- | All-zeroes 'QuadRegAcc'.
 zeroQuadRegAcc :: QuadRegAcc
-zeroQuadRegAcc = QuadRegAcc zeroKahan zeroKahan zeroKahan zeroKahan zeroKahan zeroKahan zeroKahan zeroKahan zeroKahan
+zeroQuadRegAcc = QuadRegAcc zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN
 
 -- | Add a point to quadreg accumulator.
 addQuadReg
@@ -320,15 +333,15 @@ addQuadReg
     -> Double  -- ^ y
     -> QuadRegAcc
 addQuadReg QuadRegAcc {..} x y = QuadRegAcc
-    { qra_w    = addKahan qra_w   1
-    , qra_x    = addKahan qra_x   x
-    , qra_x2   = addKahan qra_x2  x2
-    , qra_x3   = addKahan qra_x3  (x * x2)
-    , qra_x4   = addKahan qra_x4  (x2 * x2)
-    , qra_y    = addKahan qra_y   y
-    , qra_xy   = addKahan qra_xy  (x * y)
-    , qra_x2y  = addKahan qra_x2y (x2 * y)
-    , qra_y2   = addKahan qra_y2  (y * y)
+    { qra_w    = addKBN qra_w   1
+    , qra_x    = addKBN qra_x   x
+    , qra_x2   = addKBN qra_x2  x2
+    , qra_x3   = addKBN qra_x3  (x * x2)
+    , qra_x4   = addKBN qra_x4  (x2 * x2)
+    , qra_y    = addKBN qra_y   y
+    , qra_xy   = addKBN qra_xy  (x * y)
+    , qra_x2y  = addKBN qra_x2y (x2 * y)
+    , qra_y2   = addKBN qra_y2  (y * y)
     }
   where
     x2 = x * x
@@ -341,15 +354,15 @@ addQuadRegW
     -> Double  -- ^ w
     -> QuadRegAcc
 addQuadRegW QuadRegAcc {..} x y w = QuadRegAcc
-    { qra_w    = addKahan qra_w   w
-    , qra_x    = addKahan qra_x   (w * x)
-    , qra_x2   = addKahan qra_x2  (w * x2)
-    , qra_x3   = addKahan qra_x3  (w * x * x2)
-    , qra_x4   = addKahan qra_x4  (w * x2 * x2)
-    , qra_y    = addKahan qra_y   (w * y)
-    , qra_xy   = addKahan qra_xy  (w * x * y)
-    , qra_x2y  = addKahan qra_x2y (w * x2 * y)
-    , qra_y2   = addKahan qra_y2  (w * y * y)
+    { qra_w    = addKBN qra_w   w
+    , qra_x    = addKBN qra_x   (w * x)
+    , qra_x2   = addKBN qra_x2  (w * x2)
+    , qra_x3   = addKBN qra_x3  (w * x * x2)
+    , qra_x4   = addKBN qra_x4  (w * x2 * x2)
+    , qra_y    = addKBN qra_y   (w * y)
+    , qra_xy   = addKBN qra_xy  (w * x * y)
+    , qra_x2y  = addKBN qra_x2y (w * x2 * y)
+    , qra_y2   = addKBN qra_y2  (w * y * y)
     }
   where
     x2 = x * x
