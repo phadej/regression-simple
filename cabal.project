@@ -2,3 +2,5 @@ packages: .
 
 package quad
   ghc-options: -Wall
+
+extra-packages: math-functions, statistics
