@@ -60,6 +60,9 @@ instance Add Double where
     zero = 0
     add = (+)
 
+instance Mult Double Double Double where
+    mult = (*)
+
 instance Det Double where
     det = id
 

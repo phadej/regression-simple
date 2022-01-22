@@ -3,12 +3,31 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs                  #-}
 {-# LANGUAGE RecordWildCards        #-}
+-- |
+--
+-- @regression-simple@ provides (hopefully) simple regression functions.
+--
+-- The @'linear' :: Foldable f => (a -> (Double, Double)) -> f a -> 'V2'@
+-- is the simplest one.
+--
+-- There are variants with weights, y-errors, and x and y-errors.
+-- In addition, package includes Levenberg–Marquardt algorithm implementation
+-- to fit arbitrary functions (with one, two or three parameters),
+-- as long as you can give their partial derivatives as well (@ad@ package is handy for that).
+--
+-- For multiple independent variable ordinary least squares
+-- or Levenberg-Marquard with functions with \> 3 parameter you should look elsewhere.
+--
+-- Package has been tested to return similar results as @fit@ functionality in @gnuplot@
+-- (L-M doesn't always converge to exactly the same points in parameter space).
+--
 module Math.Regression.Simple (
     -- * Linear regression
     linear,
     linearFit,
     linearWithWeights,
     linearWithYerrors,
+    linearWithXYerrors,
     -- ** Step-by-step interface
     linearFit',
     LinRegAcc (..),
@@ -20,6 +39,7 @@ module Math.Regression.Simple (
     quadraticFit,
     quadraticWithWeights,
     quadraticWithYerrors,
+    quadraticWithXYerrors,
     -- ** Step-by-step interface
     quadraticFit',
     QuadRegAcc (..),
@@ -27,6 +47,22 @@ module Math.Regression.Simple (
     addQuadReg,
     addQuadRegW,
     quadRegAccToLin,
+    -- * Levenberg–Marquardt algorithm
+    -- ** One parameter
+    levenbergMarquardt1,
+    levenbergMarquardt1WithWeights,
+    levenbergMarquardt1WithYerrors,
+    levenbergMarquardt1WithXYerrors,
+    -- ** Two parameters
+    levenbergMarquardt2,
+    levenbergMarquardt2WithWeights,
+    levenbergMarquardt2WithYerrors,
+    levenbergMarquardt2WithXYerrors,
+    -- ** Three parameters
+    levenbergMarquardt3,
+    levenbergMarquardt3WithWeights,
+    levenbergMarquardt3WithYerrors,
+    levenbergMarquardt3WithXYerrors,
     -- * Auxiliary types
     Fit (..),
     V2 (..),
@@ -35,20 +71,22 @@ module Math.Regression.Simple (
 
 import Control.DeepSeq (NFData (..))
 
-import qualified Data.Foldable as F
+import qualified Data.Foldable      as F
+import qualified Data.List.NonEmpty as NE
 
 import Math.Regression.Simple.LinAlg
 import Numeric.KBN
 
-
 -- $setup
--- >>> :set -XTypeApplications
+-- >>> :set -XDeriveFunctor -XDeriveFoldable -XDeriveTraversable
 --
 -- >>> import Numeric (showFFloat)
+-- >>> import Data.List.NonEmpty (NonEmpty (..))
+-- >>> import qualified Data.List.NonEmpty as NE
 --
 -- Don't show too much decimal digits
 --
--- >>> showDouble x = showFFloat @Double (Just (min 5 (5 - ceiling (logBase 10 x)))) x
+-- >>> let showDouble x = showFFloat (Just (min 5 (5 - ceiling (logBase 10 x)))) (x :: Double)
 -- >>> showDouble 123.456 ""
 -- "123.46"
 --
@@ -70,11 +108,16 @@ import Numeric.KBN
 -- >>> instance Show' v => Show' (Fit v) where showsPrec' d (Fit p e ndf wssr) = showParen (d > 10) $ showString "Fit " . showsPrec' 11 p . showChar ' ' . showsPrec' 11 e . showChar ' ' . showsPrec' 11 ndf . showChar ' ' . showsPrec' 11 wssr
 -- >>> instance Show' V2 where showsPrec' d (V2 x y)   = showParen (d > 10) $ showString "V2 " . showsPrec' 11 x . showChar ' ' . showsPrec' 11 y
 -- >>> instance Show' V3 where showsPrec' d (V3 x y z) = showParen (d > 10) $ showString "V3 " . showsPrec' 11 x . showChar ' ' . showsPrec' 11 y . showChar ' ' . showsPrec' 11 z
+-- >>> instance Show' a => Show' [a] where showsPrec' _ [] = id; showsPrec' _ [x] = showsPrec' 0 x; showsPrec' _ (x:xs) = showsPrec' 0 x . showChar '\n' . showsPrec' 0 xs
+-- >>> instance Show' a => Show' (NonEmpty a) where showsPrec' _ (x :| []) = showsPrec' 0 x; showsPrec' _ (x:|xs) = showsPrec' 0 x . showChar '\n' . showsPrec' 0 xs
+-- >>>
 --
 -- Inputs:
 -- >>> let input1 = [(0, 1), (1, 3), (2, 5)]
 -- >>> let input2 = [(0.1, 1.2), (1.3, 3.1), (1.9, 4.9), (3.0, 7.1), (4.1, 9.0)]
 -- >>> let input3 = [(0, 2), (1, 3), (2, 6), (3, 11)]
+--
+-- >>> let sq z = z * z
 --
 
 -------------------------------------------------------------------------------
@@ -161,15 +204,54 @@ linearWithWeights f = linearFit' . linRegAccW f
 -- If Q is too large, too near to 1 is most likely caused by overestimating
 -- the y-errors.
 --
+--
 linearWithYerrors :: F.Foldable f => (a -> (Double, Double, Double)) -> f a -> Fit V2
 linearWithYerrors f = linearWithWeights f' where
     f' a = case f a of
         (x, y, dy) -> (x, y, recip (dy * dy))
 
+-- | Iterative linear regression with x and y errors.
+--
+-- /Orear, J. (1982). Least squares when both variables have uncertainties. American Journal of Physics, 50(10), 912–916. doi:10.1119\/1.12972/
+--
+-- >>> let input2xy = [(0.1, 1.2, 0.01, 0.12), (1.3, 3.1, 0.13, 0.31), (1.9, 4.9, 0.19, 0.49), (3.0, 7.1, 0.3, 0.71), (4.1, 9.0, 0.41, 1.9)]
+-- >>> let fit :| fits = linearWithXYerrors id input2xy
+--
+-- First fit is done using 'linearWithYerrors':
+--
+-- >>> PP fit
+-- Fit (V2 1.9104 0.98302) (V2 0.13006 0.10462) 3 2.0930
+--
+-- After that the effective variance is used to refine the fit,
+-- just a few iterations is often enough:
+--
+-- >>> PP $ take 3 fits
+-- Fit (V2 1.9092 0.99251) (V2 0.12417 0.08412) 3 1.2992
+-- Fit (V2 1.9092 0.99250) (V2 0.12418 0.08414) 3 1.2998
+-- Fit (V2 1.9092 0.99250) (V2 0.12418 0.08414) 3 1.2998
+--
+linearWithXYerrors
+    :: F.Foldable f
+    => (a -> (Double, Double, Double, Double))  -- ^ \(x_i, y_i, \delta x_i, \delta y_i\)
+    -> f a                                      -- ^ data
+    -> NE.NonEmpty (Fit V2)
+linearWithXYerrors f xs = iterate1 go fit0 where
+    fit0   = linearWithYerrors (\a -> case f a of (x,y,_,dy) -> (x,y,dy)) xs
+    go fit = linearWithWeights (\a -> case f a of (x,y,dx,dy) -> (x,y,recip $ sq (param1 * dx) + sq dy)) xs where
+        V2 param1 _ = fitParams fit
+
+-- >>> import qualified Numeric.AD.Mode.Reverse.Double as AD
+-- >>> data H3 a = H3 a a a deriving (Functor, Foldable, Traversable)
+-- >>> let linearF (H3 a b x) = a * x + b
+-- >>> let lin' (V2 a b) (x, y, dx, dy) = case AD.grad' linearF (H3 a b x) of (f, H3 da db f') -> (y, f, V2 da db, recip $ sq (f' * dx) + sq dy)
+--
+-- >>> PP $ NE.last $ levenbergMarquardt2WithWeights lin' (V2 1 1) input2xy
+-- Fit (V2 1.9092 0.99250) (V2 0.12418 0.08414) 3 1.2998
+
 -- | Calculate linear fit from 'LinRegAcc'.
 linearFit' :: LinRegAcc -> Fit V2
 linearFit' LinRegAcc {..} = Fit params errors ndf wssr where
-    matrix@(SM22 a11 _ a22) = inv (SM22 x2 x n)
+    matrix@(SM22 a11 _ a22) = inv (SM22 x2 x w)
     params@(V2 a b)         = mult matrix (V2 xy y)
 
     errors = V2 sa sb
@@ -183,7 +265,7 @@ linearFit' LinRegAcc {..} = Fit params errors ndf wssr where
     sa   = sqrt (a11 * wssr / ndf')
     sb   = sqrt (a22 * wssr / ndf')
 
-    n  = getKBN lra_w
+    w  = getKBN lra_w
     x  = getKBN lra_x
     x2 = getKBN lra_x2
     y  = getKBN lra_y
@@ -251,6 +333,20 @@ quadraticWithYerrors f = quadraticWithWeights f' where
     f' a = case f a of
         (x, y, dy) -> (x, y, recip (dy * dy))
 
+-- | Iterative quadratic regression with x and y errors.
+--
+-- /Orear, J. (1982). Least squares when both variables have uncertainties. American Journal of Physics, 50(10), 912–916. doi:10.1119\/1.12972/
+--
+quadraticWithXYerrors
+    :: F.Foldable f
+    => (a -> (Double, Double, Double, Double))  -- ^ \(x_i, y_i, \delta x_i, \delta y_i\)
+    -> f a                                      -- ^ data
+    -> NE.NonEmpty (Fit V3)
+quadraticWithXYerrors f xs = iterate1 go fit0 where
+    fit0   = quadraticWithYerrors (\a -> case f a of (x,y,_,dy) -> (x,y,dy)) xs
+    go fit = quadraticWithWeights (\a -> case f a of (x,y,dx,dy) -> (x,y,recip $ sq ((2 * p1 * x + p2) * dx) + sq dy)) xs where
+        V3 p1 p2 _ = fitParams fit
+
 -- | Calculate quadratic fit from 'QuadRegAcc'.
 quadraticFit' :: QuadRegAcc -> Fit V3
 quadraticFit' QuadRegAcc {..} = Fit params errors ndf wssr where
@@ -258,7 +354,7 @@ quadraticFit' QuadRegAcc {..} = Fit params errors ndf wssr where
                  _   a22
                  _   _   a33) = inv (SM33 x4
                                           x3 x2
-                                          x2  x n)
+                                          x2  x w)
 
     params@(V3 a b c) = mult matrix (V3 x2y xy y)
 
@@ -272,7 +368,7 @@ quadraticFit' QuadRegAcc {..} = Fit params errors ndf wssr where
     sb  = sqrt (a22 * wssr / ndf')
     sc  = sqrt (a33 * wssr / ndf')
 
-    n   = getKBN qra_w
+    w   = getKBN qra_w
     x   = getKBN qra_x
     x2  = getKBN qra_x2
     x3  = getKBN qra_x3
@@ -290,6 +386,645 @@ quadRegAcc f = F.foldl' (\acc a -> case f a of (x,y) -> addQuadReg acc x y) zero
 
 quadRegAccW :: F.Foldable f => (a -> (Double, Double, Double)) -> f a -> QuadRegAcc
 quadRegAccW f = F.foldl' (\acc a -> case f a of (x,y,w) -> addQuadRegW acc x y w) zeroQuadRegAcc
+
+-------------------------------------------------------------------------------
+-- Levenberg–Marquardt 1
+-------------------------------------------------------------------------------
+
+-- | Levenberg–Marquardt for functions with one parameter.
+--
+-- See 'levenbergMarquardt2' for examples, this is very similar.
+--
+-- For example we can fit \(f = x \mapsto \beta x + 1\), its derivative is \(\partial_\beta f = x \mapsto x\).
+--
+-- >>> let scale a (x, y) = (y, a * x + 1, x)
+-- >>> PP $ NE.last $ levenbergMarquardt1 scale 1 input2
+-- Fit 1.9685 0.04735 4 0.27914
+--
+-- Not bad, but worse then linear fit which fits the intercept point too.
+--
+levenbergMarquardt1
+    :: F.Foldable f
+    => (Double -> a -> (Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \partial_\beta f(\beta, x)\)
+    -> Double                                     -- ^ initial parameter, \(\beta_0\)
+    -> f a                                        -- ^ data, \(d\)
+    -> NE.NonEmpty (Fit Double)                   -- ^ non-empty list of iteration results
+levenbergMarquardt1 f b0 xs = loop lambda0 b0 acc0 where
+    acc0 = calcAcc b0
+
+    lambda0 = c11
+      where
+        c11 = getKBN $ lm1_c11 acc0
+
+    calcAcc beta = F.foldl' (\acc p -> case f beta p of (y, g, d) -> addLM1Acc acc y g d) zeroLM1Acc xs
+
+    loop lambda beta acc
+        | lmStop lambda wssr wssr'
+        = Fit beta errors ndf wssr NE.:| []
+
+        | wssr' >= wssr
+        = loop (lambda * 10) beta acc
+
+        | otherwise
+        = Fit beta errors ndf wssr `NE.cons` loop (lambda / 10) beta' acc'
+
+      where
+        lambda1 z = (1 + lambda) * z
+        matrix    = inv (lambda1 c11)
+        delta     = mult matrix z1
+
+        beta' = add beta delta
+        acc'  = calcAcc beta'
+
+        a11    = inv c11
+        errors = sa
+
+        wssr  = max 0 $ getKBN $ lm1_wssr acc
+        wssr' =         getKBN $ lm1_wssr acc'
+
+        ndf   = lm1_n acc - 1
+        ndf'  = fromIntegral ndf :: Double
+
+        sa   = sqrt (a11 * wssr / ndf')
+
+        c11 = getKBN $ lm1_c11 acc
+        z1  = getKBN $ lm1_z1 acc
+
+-- | 'levenbergMarquardt1' with weights.
+levenbergMarquardt1WithWeights
+    :: F.Foldable f
+    => (Double -> a -> (Double, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \partial_\beta f(\beta, x), w_i\)
+    -> Double                                             -- ^ initial parameter, \(\beta_0\)
+    -> f a                                                -- ^ data, \(d\)
+    -> NE.NonEmpty (Fit Double)                           -- ^ non-empty list of iteration results
+levenbergMarquardt1WithWeights f b0 xs = loop lambda0 b0 acc0 where
+    acc0 = calcAcc b0
+
+    lambda0 = c11
+      where
+        c11 = getKBN $ lm1_c11 acc0
+
+    calcAcc beta = F.foldl' (\acc p -> case f beta p of (y, g, d, w) -> addLM1AccW acc y g d w) zeroLM1Acc xs
+
+    loop lambda beta acc
+        | lmStop lambda wssr wssr'
+        = Fit beta errors ndf wssr NE.:| []
+
+        | wssr' >= wssr
+        = loop (lambda * 10) beta acc
+
+        | otherwise
+        = Fit beta errors ndf wssr `NE.cons` loop (lambda / 10) beta' acc'
+
+      where
+        lambda1 z = (1 + lambda) * z
+        matrix    = inv (lambda1 c11)
+        delta     = mult matrix z1
+
+        beta' = add beta delta
+        acc'  = calcAcc beta'
+
+        a11    = inv c11
+        errors = sa
+
+        wssr  = max 0 $ getKBN $ lm1_wssr acc
+        wssr' =         getKBN $ lm1_wssr acc'
+
+        ndf   = lm1_n acc - 1
+        ndf'  = fromIntegral ndf :: Double
+
+        sa   = sqrt (a11 * wssr / ndf')
+
+        c11 = getKBN $ lm1_c11 acc
+        z1  = getKBN $ lm1_z1 acc
+
+-- | 'levenbergMarquardt1' with Y-errors.
+levenbergMarquardt1WithYerrors
+    :: F.Foldable f
+    => (Double -> a -> (Double, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \partial_\beta f(\beta, x), \delta y_i\)
+    -> Double                                             -- ^ initial parameter, \(\beta_0\)
+    -> f a                                                -- ^ data, \(d\)
+    -> NE.NonEmpty (Fit Double)                           -- ^ non-empty list of iteration results
+levenbergMarquardt1WithYerrors f = levenbergMarquardt1WithWeights f' where
+    f' beta x = case f beta x of (y, fbetax, grad, dy) -> (y, fbetax, grad, recip $ sq dy)
+
+-- | 'levenbergMarquardt1' with XY-errors.
+levenbergMarquardt1WithXYerrors
+    :: F.Foldable f
+    => (Double -> a -> (Double, Double, Double, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \partial_\beta f(\beta, x), \partial_x f(\beta, x), \delta x_i, \delta y_i\)
+    -> Double                                                             -- ^ initial parameter, \(\beta_0\)
+    -> f a                                                                -- ^ data, \(d\)
+    -> NE.NonEmpty (Fit Double)                                           -- ^ non-empty list of iteration results
+levenbergMarquardt1WithXYerrors g = levenbergMarquardt1WithWeights g' where
+    g' beta x = case g beta x of (y, fbetax, grad, f', dx, dy) -> (y, fbetax, grad, recip $ sq (f' * dx) + sq dy)
+
+data LM1Acc = LM1Acc
+    { lm1_n    :: !Int
+    , lm1_c11  :: !KBN
+    , lm1_z1   :: !KBN
+    , lm1_wssr :: !KBN
+    }
+  deriving Show
+
+zeroLM1Acc :: LM1Acc
+zeroLM1Acc = LM1Acc 0 zeroKBN zeroKBN zeroKBN
+
+addLM1Acc :: LM1Acc -> Double -> Double -> Double -> LM1Acc
+addLM1Acc LM1Acc {..} y f d1 = LM1Acc
+    { lm1_n    = lm1_n + 1
+    , lm1_c11  = addKBN lm1_c11  (d1 * d1)
+    , lm1_z1   = addKBN lm1_z1   (d1 * res)
+    , lm1_wssr = addKBN lm1_wssr (res * res)
+    }
+  where
+    res = y - f
+
+addLM1AccW :: LM1Acc -> Double -> Double -> Double -> Double -> LM1Acc
+addLM1AccW LM1Acc {..} y f d1 w = LM1Acc
+    { lm1_n    = lm1_n + 1
+    , lm1_c11  = addKBN lm1_c11  (w * d1 * d1)
+    , lm1_z1   = addKBN lm1_z1   (w * d1 * res)
+    , lm1_wssr = addKBN lm1_wssr (w * res * res)
+    }
+  where
+    res = y - f
+
+-------------------------------------------------------------------------------
+-- Levenberg–Marquardt 2
+-------------------------------------------------------------------------------
+
+-- | Levenberg–Marquardt for functions with two parameters.
+--
+-- You can use this sledgehammer to do a a linear fit:
+--
+-- >>> let lin (V2 a b) (x, y) = (y, a * x + b, V2 x 1)
+--
+-- We can then use 'levenbergMarquardt2' to find a fit:
+--
+-- >>> PP $ levenbergMarquardt2 lin (V2 1 1) input2
+-- Fit (V2 1.00000 1.00000) (V2 1.0175 2.5385) 3 29.470
+-- Fit (V2 1.0181 1.0368) (V2 0.98615 2.4602) 3 27.681
+-- Fit (V2 1.1557 1.2988) (V2 0.75758 1.8900) 3 16.336
+-- Fit (V2 1.5463 1.6577) (V2 0.29278 0.73043) 3 2.4400
+-- Fit (V2 1.9129 1.1096) (V2 0.11033 0.27524) 3 0.34645
+-- Fit (V2 2.0036 0.89372) (V2 0.09552 0.23830) 3 0.25970
+-- Fit (V2 2.0063 0.88687) (V2 0.09550 0.23826) 3 0.25962
+-- Fit (V2 2.0063 0.88685) (V2 0.09550 0.23826) 3 0.25962
+--
+-- This is the same result what 'linearFit' returns:
+--
+-- >>> PP $ linearFit id input2
+-- Fit (V2 2.0063 0.88685) (V2 0.09550 0.23826) 3 0.25962
+--
+-- == Using AD
+--
+-- You can use @ad@ to calculate derivatives for you.
+--
+-- >>> import qualified Numeric.AD.Mode.Reverse.Double as AD
+--
+-- We need a ('Traversable') homogenic triple to represent the two parameters and @x@:
+--
+-- >>> data H3 a = H3 a a a deriving (Functor, Foldable, Traversable)
+--
+-- Then we define a function @ad@ can operate with:
+--
+-- >>> let linearF (H3 a b x) = a * x + b
+--
+-- which we can use to fit the curve in generic way:
+--
+-- >>> let lin' (V2 a b) (x, y) = case AD.grad' linearF (H3 a b x) of (f, H3 da db _f') -> (y, f, V2 da db)
+-- >>> PP $ levenbergMarquardt2 lin' (V2 1 1) input2
+-- Fit (V2 1.00000 1.00000) (V2 1.0175 2.5385) 3 29.470
+-- Fit (V2 1.0181 1.0368) (V2 0.98615 2.4602) 3 27.681
+-- Fit (V2 1.1557 1.2988) (V2 0.75758 1.8900) 3 16.336
+-- Fit (V2 1.5463 1.6577) (V2 0.29278 0.73043) 3 2.4400
+-- Fit (V2 1.9129 1.1096) (V2 0.11033 0.27524) 3 0.34645
+-- Fit (V2 2.0036 0.89372) (V2 0.09552 0.23830) 3 0.25970
+-- Fit (V2 2.0063 0.88687) (V2 0.09550 0.23826) 3 0.25962
+-- Fit (V2 2.0063 0.88685) (V2 0.09550 0.23826) 3 0.25962
+--
+-- == Non-polynomial example
+--
+-- We can fit other curves too, for example an example from Wikipedia
+-- https://en.wikipedia.org/wiki/Gauss%E2%80%93Newton_algorithm#Example
+--
+-- >>> let rateF (H3 vmax km s) = (vmax * s) / (km + s)
+-- >>> let rateF' (V2 vmax km) (x, y) = case AD.grad' rateF (H3 vmax km x) of (f, H3 vmax' km' _) -> (y, f, V2 vmax' km')
+-- >>> let input = zip [0.038,0.194,0.425,0.626,1.253,2.500,3.740] [0.050,0.127,0.094,0.2122,0.2729,0.2665,0.3317]
+-- >>> PP $ levenbergMarquardt2 rateF' (V2 0.9 0.2) input
+-- Fit (V2 0.90000 0.20000) (V2 0.43304 0.43936) 5 1.4455
+-- Fit (V2 0.83306 0.25278) (V2 0.39164 0.49729) 5 1.0055
+-- Fit (V2 0.59437 0.43508) (V2 0.21158 0.53403) 5 0.18832
+-- Fit (V2 0.39687 0.56324) (V2 0.05723 0.25666) 5 0.01062
+-- Fit (V2 0.36289 0.56104) (V2 0.04908 0.24007) 5 0.00784
+-- Fit (V2 0.36190 0.55662) (V2 0.04887 0.23843) 5 0.00784
+-- Fit (V2 0.36184 0.55629) (V2 0.04885 0.23830) 5 0.00784
+-- Fit (V2 0.36184 0.55627) (V2 0.04885 0.23829) 5 0.00784
+--
+-- We get the same result as in the article: 0.362 and 0.556
+--
+-- The algorithm terminates when a scaling parameter \(\lambda\) becomes larger than 1e20 or smaller than 1e-20, or relative WSSR change is smaller than 1e-10, or sum-of-squared-residuals candidate becomes @NaN@ (i.e. when it would start to produce garbage).
+-- You may want to terminate sooner, Numerical Recipes suggest to stop when WSSR decreases by a neglible amount absolutely or fractionally.
+--
+levenbergMarquardt2
+    :: F.Foldable f
+    => (V2 -> a -> (Double, Double, V2))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x)\)
+    -> V2                                 -- ^ initial parameters, \(\beta_0\)
+    -> f a                                -- ^ data, \(d\)
+    -> NE.NonEmpty (Fit V2)               -- ^ non-empty list of iteration results
+levenbergMarquardt2 f b0 xs = loop lambda0 b0 acc0 where
+    acc0 = calcAcc b0
+
+    calcAcc beta = F.foldl' (\acc p -> case f beta p of (y, g, d) -> addLM2Acc acc y g d) zeroLM2Acc xs
+
+    lambda0 = max l1 l2
+      where
+        V2 l1 l2 = eigenSM22 c11 c12 c22
+        c11 = getKBN $ lm2_c11 acc0
+        c12 = getKBN $ lm2_c11 acc0
+        c22 = getKBN $ lm2_c22 acc0
+
+    loop lambda beta acc
+        | lmStop lambda wssr wssr'
+        = Fit beta errors ndf wssr NE.:| []
+
+        | wssr' >= wssr
+        = loop (lambda * 10) beta acc
+
+        | otherwise
+        = Fit beta errors ndf wssr `NE.cons` loop (lambda / 10) beta' acc'
+
+      where
+        lambda1 z = (1 + lambda) * z
+        matrix    = inv (SM22 (lambda1 c11) c12 (lambda1 c22))
+        delta     = mult matrix (V2 z1 z2)
+
+        beta' = add beta delta
+        acc'  = calcAcc beta'
+
+        SM22 a11 _ a22 = inv (SM22 c11 c12 c22)
+        errors = V2 sa sb
+
+        wssr  = max 0 $ getKBN $ lm2_wssr acc
+        wssr' =         getKBN $ lm2_wssr acc'
+
+        ndf   = lm2_n acc - 2
+        ndf'  = fromIntegral ndf :: Double
+
+        sa   = sqrt (a11 * wssr / ndf')
+        sb   = sqrt (a22 * wssr / ndf')
+
+        c11 = getKBN $ lm2_c11 acc
+        c12 = getKBN $ lm2_c12 acc
+        c22 = getKBN $ lm2_c22 acc
+        z1  = getKBN $ lm2_z1 acc
+        z2  = getKBN $ lm2_z2 acc
+
+-- | 'levenbergMarquardt2' with weights.
+--
+-- Because 'levenbergMarquardt2' is an iterative algorithm,
+-- not only we can use it to fit curves with known y-errors ('levenbergMarquardt2WithYerrors'),
+-- but also with both x and y-errors ('levenbergMarquardt2WithXYerrors').
+--
+levenbergMarquardt2WithWeights
+    :: F.Foldable f
+    => (V2 -> a -> (Double, Double, V2, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x), w_i\)
+    -> V2                                         -- ^ initial parameters, \(\beta_0\)
+    -> f a                                        -- ^ data, \(d\)
+    -> NE.NonEmpty (Fit V2)                       -- ^ non-empty list of iteration results
+levenbergMarquardt2WithWeights f b0 xs = loop lambda0 b0 acc0 where
+    acc0 = calcAcc b0
+
+    lambda0 = max l1 l2
+      where
+        V2 l1 l2 = eigenSM22 c11 c12 c22
+        c11 = getKBN $ lm2_c11 acc0
+        c12 = getKBN $ lm2_c11 acc0
+        c22 = getKBN $ lm2_c22 acc0
+
+    calcAcc beta = F.foldl' (\acc p -> case f beta p of (y, g, d, w) -> addLM2AccW acc y g d w) zeroLM2Acc xs
+
+    loop lambda beta acc
+        | lmStop lambda wssr wssr'
+        = Fit beta errors ndf wssr NE.:| []
+
+        | wssr' >= wssr
+        = loop (lambda * 10) beta acc
+
+        | otherwise
+        = Fit beta errors ndf wssr `NE.cons` loop (lambda / 10) beta' acc'
+
+      where
+        lambda1 z = (1 + lambda) * z
+        matrix    = inv (SM22 (lambda1 c11) c12 (lambda1 c22))
+        delta     = mult matrix (V2 z1 z2)
+
+        beta' = add beta delta
+        acc'  = calcAcc beta'
+
+        SM22 a11 _ a22 = inv (SM22 c11 c12 c22)
+        errors = V2 sa sb
+
+        wssr  = max 0 $ getKBN $ lm2_wssr acc
+        wssr' =         getKBN $ lm2_wssr acc'
+
+        ndf   = lm2_n acc - 2
+        ndf'  = fromIntegral ndf :: Double
+
+        sa   = sqrt (a11 * wssr / ndf')
+        sb   = sqrt (a22 * wssr / ndf')
+
+        c11 = getKBN $ lm2_c11 acc
+        c12 = getKBN $ lm2_c12 acc
+        c22 = getKBN $ lm2_c22 acc
+        z1  = getKBN $ lm2_z1 acc
+        z2  = getKBN $ lm2_z2 acc
+
+-- | 'levenbergMarquardt2' with Y-errors.
+levenbergMarquardt2WithYerrors
+    :: F.Foldable f
+    => (V2 -> a -> (Double, Double, V2, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x), \delta y_i\)
+    -> V2                                         -- ^ initial parameters, \(\beta_0\)
+    -> f a                                        -- ^ data, \(d\)
+    -> NE.NonEmpty (Fit V2)                       -- ^ non-empty list of iteration results
+levenbergMarquardt2WithYerrors f = levenbergMarquardt2WithWeights f' where
+    f' beta x = case f beta x of (y, fbetax, grad, dy) -> (y, fbetax, grad, recip $ sq dy)
+
+-- | 'levenbergMarquardt2' with XY-errors.
+levenbergMarquardt2WithXYerrors
+    :: F.Foldable f
+    => (V2 -> a -> (Double, Double, V2, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x), \partial_x f(\beta, x), \delta x_i, \delta y_i\)
+    -> V2                                                         -- ^ initial parameters, \(\beta_0\)
+    -> f a                                                        -- ^ data, \(d\)
+    -> NE.NonEmpty (Fit V2)                                       -- ^ non-empty list of iteration results
+levenbergMarquardt2WithXYerrors g = levenbergMarquardt2WithWeights g' where
+    g' beta x = case g beta x of (y, fbetax, grad, f', dx, dy) -> (y, fbetax, grad, recip $ sq (f' * dx) + sq dy)
+
+data LM2Acc = LM2Acc
+    { lm2_n    :: !Int
+    , lm2_c11  :: !KBN
+    , lm2_c12  :: !KBN
+    , lm2_c22  :: !KBN
+    , lm2_z1   :: !KBN
+    , lm2_z2   :: !KBN
+    , lm2_wssr :: !KBN
+    }
+  deriving Show
+
+zeroLM2Acc :: LM2Acc
+zeroLM2Acc = LM2Acc 0 zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN
+
+addLM2Acc :: LM2Acc -> Double -> Double -> V2 -> LM2Acc
+addLM2Acc LM2Acc {..} y f (V2 d1 d2) = LM2Acc
+    { lm2_n    = lm2_n + 1
+    , lm2_c11  = addKBN lm2_c11  (d1 * d1)
+    , lm2_c12  = addKBN lm2_c12  (d1 * d2)
+    , lm2_c22  = addKBN lm2_c22  (d2 * d2)
+    , lm2_z1   = addKBN lm2_z1   (d1 * res)
+    , lm2_z2   = addKBN lm2_z2   (d2 * res)
+    , lm2_wssr = addKBN lm2_wssr (res * res)
+    }
+  where
+    res = y - f
+
+addLM2AccW :: LM2Acc -> Double -> Double -> V2 -> Double -> LM2Acc
+addLM2AccW LM2Acc {..} y f (V2 d1 d2) w = LM2Acc
+    { lm2_n    = lm2_n + 1
+    , lm2_c11  = addKBN lm2_c11  (w * d1 * d1)
+    , lm2_c12  = addKBN lm2_c12  (w * d1 * d2)
+    , lm2_c22  = addKBN lm2_c22  (w * d2 * d2)
+    , lm2_z1   = addKBN lm2_z1   (w * d1 * res)
+    , lm2_z2   = addKBN lm2_z2   (w * d2 * res)
+    , lm2_wssr = addKBN lm2_wssr (w * res * res)
+    }
+  where
+    res = y - f
+
+-------------------------------------------------------------------------------
+-- Levenberg–Marquardt 3
+-------------------------------------------------------------------------------
+
+-- | Levenberg–Marquardt for functions with three parameters.
+--
+-- See 'levenbergMarquardt2' for examples, this is very similar.
+--
+-- >>> let quad (V3 a b c) (x, y) = (y, a * x * x + b * x + c, V3 (x * x) x 1)
+-- >>> PP $ NE.last $ levenbergMarquardt3 quad (V3 2 2 2) input3
+-- Fit (V3 1.00000 0.00000 2.0000) (V3 0.00000 0.00000 0.00000) 1 0.00000
+--
+-- Same as quadratic fit, just less direct:
+--
+-- >>> PP $ quadraticFit id input3
+-- Fit (V3 1.00000 0.00000 2.0000) (V3 0.00000 0.00000 0.00000) 1 0.00000
+--
+levenbergMarquardt3
+    :: F.Foldable f
+    => (V3 -> a -> (Double, Double, V3))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x)\)
+    -> V3                                 -- ^ initial parameters, \(\beta_0\)
+    -> f a                                -- ^ data, \(d\)
+    -> NE.NonEmpty (Fit V3)               -- ^ non-empty list of iteration results
+levenbergMarquardt3 f b0 xs = loop lambda0 b0 acc0 where
+    acc0 = calcAcc b0
+
+    calcAcc beta = F.foldl' (\acc p -> case f beta p of (y, g, d) -> addLM3Acc acc y g d) zeroLM3Acc xs
+
+    -- frobenius norm is larger than largest eigen value.
+    -- calculating the eigen values for 3x3 (symmetric) matrix is becoming complicated.
+    lambda0 = sqrt $ sumKBN [ sq c11
+                            , 2 * sq c12, sq c22
+                            , 2 * sq c13, 2 * sq c23, sq c33]
+      where
+        c11 = getKBN $ lm3_c11 acc0
+        c12 = getKBN $ lm3_c12 acc0
+        c13 = getKBN $ lm3_c13 acc0
+        c22 = getKBN $ lm3_c22 acc0
+        c23 = getKBN $ lm3_c23 acc0
+        c33 = getKBN $ lm3_c33 acc0
+
+    loop lambda beta acc
+        | lmStop lambda wssr wssr'
+        = Fit beta errors ndf wssr NE.:| []
+
+        | wssr' >= wssr
+        = loop (lambda * 10) beta acc
+
+        | otherwise
+        = Fit beta errors ndf wssr `NE.cons` loop (lambda / 10) beta' acc'
+
+      where
+        lambda1 z = (1 + lambda) * z
+        matrix    = inv (SM33 (lambda1 c11)
+                               c12          (lambda1 c22)
+                               c13          c23           (lambda1 c33))
+        delta     = mult matrix (V3 z1 z2 z3)
+
+        beta' = add beta delta
+        acc'  = calcAcc beta'
+
+        SM33 a11
+             _  a22
+             _  _   a33 = inv (SM33 c11
+                                    c12 c22
+                                    c13 c23 c33)
+        errors = V3 sa sb sc
+
+        wssr  = max 0 $ getKBN $ lm3_wssr acc
+        wssr' =         getKBN $ lm3_wssr acc'
+
+        ndf   = lm3_n acc - 3
+        ndf'  = fromIntegral ndf :: Double
+
+        sa   = sqrt (a11 * wssr / ndf')
+        sb   = sqrt (a22 * wssr / ndf')
+        sc   = sqrt (a33 * wssr / ndf')
+
+        c11 = getKBN $ lm3_c11 acc
+        c12 = getKBN $ lm3_c12 acc
+        c13 = getKBN $ lm3_c13 acc
+        c22 = getKBN $ lm3_c22 acc
+        c23 = getKBN $ lm3_c23 acc
+        c33 = getKBN $ lm3_c33 acc
+        z1  = getKBN $ lm3_z1 acc
+        z2  = getKBN $ lm3_z2 acc
+        z3  = getKBN $ lm3_z3 acc
+
+-- | 'levenbergMarquardt3' with weights.
+levenbergMarquardt3WithWeights
+    :: F.Foldable f
+    => (V3 -> a -> (Double, Double, V3, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x), w_i\)
+    -> V3                                         -- ^ initial parameters, \(\beta_0\)
+    -> f a                                        -- ^ data, \(d\)
+    -> NE.NonEmpty (Fit V3)                       -- ^ non-empty list of iteration results
+levenbergMarquardt3WithWeights f b0 xs = loop lambda0 b0 acc0 where
+    acc0 = calcAcc b0
+
+    lambda0 = sqrt $ sumKBN [ sq c11
+                            , 2 * sq c12, sq c22
+                            , 2 * sq c13, 2 * sq c23, sq c33]
+      where
+        c11 = getKBN $ lm3_c11 acc0
+        c12 = getKBN $ lm3_c12 acc0
+        c13 = getKBN $ lm3_c13 acc0
+        c22 = getKBN $ lm3_c22 acc0
+        c23 = getKBN $ lm3_c23 acc0
+        c33 = getKBN $ lm3_c33 acc0
+
+    calcAcc beta = F.foldl' (\acc p -> case f beta p of (y, g, d, w) -> addLM3AccW acc y g d w) zeroLM3Acc xs
+
+    loop lambda beta acc
+        | lmStop lambda wssr wssr'
+        = Fit beta errors ndf wssr NE.:| []
+
+        | wssr' >= wssr
+        = loop (lambda * 10) beta acc
+
+        | otherwise
+        = Fit beta errors ndf wssr `NE.cons` loop (lambda / 10) beta' acc'
+
+      where
+        lambda1 z = (1 + lambda) * z
+        matrix    = inv (SM33 (lambda1 c11)
+                               c12          (lambda1 c22)
+                               c13          c23           (lambda1 c33))
+        delta     = mult matrix (V3 z1 z2 z3)
+
+        beta' = add beta delta
+        acc'  = calcAcc beta'
+
+        SM33 a11 _ _ a22 _ a33 = inv (SM33 c11 c12 c13 c22 c23 c33)
+        errors = V3 sa sb sc
+
+        wssr  = max 0 $ getKBN $ lm3_wssr acc
+        wssr' =         getKBN $ lm3_wssr acc'
+
+        ndf   = lm3_n acc - 3
+        ndf'  = fromIntegral ndf :: Double
+
+        sa   = sqrt (a11 * wssr / ndf')
+        sb   = sqrt (a22 * wssr / ndf')
+        sc   = sqrt (a33 * wssr / ndf')
+
+        c11 = getKBN $ lm3_c11 acc
+        c12 = getKBN $ lm3_c12 acc
+        c13 = getKBN $ lm3_c13 acc
+        c22 = getKBN $ lm3_c22 acc
+        c23 = getKBN $ lm3_c23 acc
+        c33 = getKBN $ lm3_c33 acc
+        z1  = getKBN $ lm3_z1 acc
+        z2  = getKBN $ lm3_z2 acc
+        z3  = getKBN $ lm3_z3 acc
+
+-- | 'levenbergMarquardt3' with Y-errors.
+levenbergMarquardt3WithYerrors
+    :: F.Foldable f
+    => (V3 -> a -> (Double, Double, V3, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x), \delta y_i\)
+    -> V3                                         -- ^ initial parameters, \(\beta_0\)
+    -> f a                                        -- ^ data, \(d\)
+    -> NE.NonEmpty (Fit V3)                       -- ^ non-empty list of iteration results
+levenbergMarquardt3WithYerrors f = levenbergMarquardt3WithWeights f' where
+    f' beta x = case f beta x of (y, fbetax, grad, dy) -> (y, fbetax, grad, recip $ sq dy)
+
+-- | 'levenbergMarquardt3' with XY-errors.
+levenbergMarquardt3WithXYerrors
+    :: F.Foldable f
+    => (V3 -> a -> (Double, Double, V3, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x), \partial_x f(\beta, x), \delta x_i, \delta y_i\)
+    -> V3                                                         -- ^ initial parameters, \(\beta_0\)
+    -> f a                                                        -- ^ data, \(d\)
+    -> NE.NonEmpty (Fit V3)                                       -- ^ non-empty list of iteration results
+levenbergMarquardt3WithXYerrors g = levenbergMarquardt3WithWeights g' where
+    g' beta x = case g beta x of (y, fbetax, grad, f', dx, dy) -> (y, fbetax, grad, recip $ sq (f' * dx) + sq dy)
+
+data LM3Acc = LM3Acc
+    { lm3_n    :: !Int
+    , lm3_c11  :: !KBN
+    , lm3_c12  :: !KBN
+    , lm3_c13  :: !KBN
+    , lm3_c22  :: !KBN
+    , lm3_c23  :: !KBN
+    , lm3_c33  :: !KBN
+    , lm3_z1   :: !KBN
+    , lm3_z2   :: !KBN
+    , lm3_z3   :: !KBN
+    , lm3_wssr :: !KBN
+    }
+  deriving Show
+
+zeroLM3Acc :: LM3Acc
+zeroLM3Acc = LM3Acc 0 zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN zeroKBN
+
+addLM3Acc :: LM3Acc -> Double -> Double -> V3 -> LM3Acc
+addLM3Acc LM3Acc {..} y f (V3 d1 d2 d3) = LM3Acc
+    { lm3_n    = lm3_n + 1
+    , lm3_c11  = addKBN lm3_c11  (d1 * d1)
+    , lm3_c12  = addKBN lm3_c12  (d1 * d2)
+    , lm3_c13  = addKBN lm3_c12  (d1 * d3)
+    , lm3_c22  = addKBN lm3_c22  (d2 * d2)
+    , lm3_c23  = addKBN lm3_c22  (d2 * d3)
+    , lm3_c33  = addKBN lm3_c22  (d3 * d3)
+    , lm3_z1   = addKBN lm3_z1   (d1 * res)
+    , lm3_z2   = addKBN lm3_z2   (d2 * res)
+    , lm3_z3   = addKBN lm3_z3   (d3 * res)
+    , lm3_wssr = addKBN lm3_wssr (res * res)
+    }
+  where
+    res = y - f
+
+addLM3AccW :: LM3Acc -> Double -> Double -> V3 -> Double -> LM3Acc
+addLM3AccW LM3Acc {..} y f (V3 d1 d2 d3) w = LM3Acc
+    { lm3_n    = lm3_n + 1
+    , lm3_c11  = addKBN lm3_c11  (w * d1 * d1)
+    , lm3_c12  = addKBN lm3_c12  (w * d1 * d2)
+    , lm3_c13  = addKBN lm3_c12  (w * d1 * d3)
+    , lm3_c22  = addKBN lm3_c22  (w * d2 * d2)
+    , lm3_c23  = addKBN lm3_c22  (w * d2 * d3)
+    , lm3_c33  = addKBN lm3_c22  (w * d3 * d3)
+    , lm3_z1   = addKBN lm3_z1   (w * d1 * res)
+    , lm3_z2   = addKBN lm3_z2   (w * d2 * res)
+    , lm3_z3   = addKBN lm3_z3   (w * d3 * res)
+    , lm3_wssr = addKBN lm3_wssr (w * res * res)
+    }
+  where
+    res = y - f
 
 -------------------------------------------------------------------------------
 -- Output
@@ -446,3 +1181,27 @@ quadRegAccToLin QuadRegAcc {..} = LinRegAcc
     , lra_xy = qra_xy
     , lra_y2 = qra_y2
     }
+
+-------------------------------------------------------------------------------
+-- utils
+-------------------------------------------------------------------------------
+
+sq :: Num a => a -> a
+sq x = x * x
+{-# INLINE sq #-}
+
+iterate1 :: (b -> b) -> b -> NE.NonEmpty b
+iterate1 g x = NE.cons x (iterate1 g (g x))
+
+eigenSM22 :: Double -> Double -> Double -> V2
+eigenSM22 a b c = V2 ((ac + discr) / 2) ((ac - discr) / 2)
+  where
+    ac = a + c
+    discr = sqrt (sq (a - c) + 4 * sq b)
+
+-- | Levenberg-Marquard stop condition
+lmStop :: Double -> Double -> Double -> Bool
+lmStop lambda wssr wssr' =
+    lambda < 1e-20 || lambda > 1e20 || isNaN wssr' || relDiff < 1e-10
+  where
+    relDiff = abs (wssr' - wssr) / wssr

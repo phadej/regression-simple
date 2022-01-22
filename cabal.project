@@ -1,6 +1,5 @@
 packages: .
+tests: True
 
 package quad
   ghc-options: -Wall
-
-extra-packages: math-functions, statistics
