@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP               #-}
 {-# LANGUAGE DeriveFoldable    #-}
 {-# LANGUAGE DeriveFunctor     #-}
 {-# LANGUAGE DeriveTraversable #-}
@@ -10,9 +11,12 @@ import Test.Tasty.HUnit (assertEqual, testCase)
 import qualified Data.Foldable                      as F
 import qualified Data.List.NonEmpty                 as NE
 import qualified Data.Traversable                   as T
+
+#if __GLASGOW_HASKELL__ >= 704
 import qualified Numeric.AD.Mode.Reverse.Double     as AD
 import qualified Statistics.Distribution            as S
 import qualified Statistics.Distribution.ChiSquared as S
+#endif
 
 import Math.Regression.Simple
 import Numeric.KBN            (sumKBN)
@@ -67,7 +71,9 @@ linearTests = withData "linear.dat" $ \load -> testGroup "linear"
         assertEqual "ndf"    18                    (round' (fitNDF fit))
         assertEqual "wssr"   38.8345               (round' (fitWSSR fit))
 
+#if __GLASGOW_HASKELL__ >= 704
         assertEqual "P"      2.999e-3              (round' (1 - S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)))
+#endif
 
     , testCase "xy-errors" $ do
         linearData <- load
@@ -77,7 +83,9 @@ linearTests = withData "linear.dat" $ \load -> testGroup "linear"
         assertEqual "ndf"    18                     (round' (fitNDF fit))
         assertEqual "wssr"   29.141                 (round' (fitWSSR fit))
 
+#if __GLASGOW_HASKELL__ >= 704
         assertEqual "P"      4.6683e-2              (round' (1 - S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)))
+#endif
 
     , testCase "yx-errors" $ do
         linearData <- load
@@ -87,7 +95,9 @@ linearTests = withData "linear.dat" $ \load -> testGroup "linear"
         assertEqual "ndf"    18                      (round' (fitNDF fit))
         assertEqual "wssr"   29.3171                 (round' (fitWSSR fit))
 
+#if __GLASGOW_HASKELL__ >= 704
         assertEqual "P"      4.4639e-2               (round' (1 - S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)))
+#endif
     ]
 
 nth :: Int -> NE.NonEmpty a -> a
@@ -117,8 +127,10 @@ quadraticTests = withData "quad.dat" $ \load -> testGroup "quad"
         assertEqual "ndf"    17                              (round' (fitNDF fit))
         assertEqual "wssr"   16.793                          (round' (fitWSSR fit))
 
+#if __GLASGOW_HASKELL__ >= 704
         let q = S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)
         assertEqual "P"      0.46847                         (round' (1 - q))
+#endif
 
     , testCase "xy-errors" $ do
         quadraticData <- load
@@ -128,8 +140,10 @@ quadraticTests = withData "quad.dat" $ \load -> testGroup "quad"
         assertEqual "ndf"    17                              (round' (fitNDF fit))
         assertEqual "wssr"   15.6318                         (round' (fitWSSR fit))
 
+#if __GLASGOW_HASKELL__ >= 704
         let q = S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)
         assertEqual "P"      0.55007                         (round' (1 - q))
+#endif
     ]
 
 -------------------------------------------------------------------------------
@@ -140,7 +154,8 @@ lm1Tests :: TestTree
 lm1Tests = withData "linear.dat" $ \load -> testGroup "lm1"
     [ testCase "no-errors" $ do
         linearData <- load
-        let scale a (x, y, _, _) = case AD.grad' scaleF (H2 a x) of
+
+        let scale a (x, y, _, _) = case scaleGrad' (H2 a x) of
                 (f, H2 da _) -> (y, f, da)
 
         let fit = NE.last $ levenbergMarquardt1 scale 1 linearData
@@ -151,7 +166,7 @@ lm1Tests = withData "linear.dat" $ \load -> testGroup "lm1"
 
     , testCase "y-errors" $ do
         linearData <- load
-        let scaleY a (x, y, _, dy) = case AD.grad' scaleF (H2 a x) of
+        let scaleY a (x, y, _, dy) = case scaleGrad' (H2 a x) of
                 (f, H2 da _) -> (y, f, da, dy)
         let fit = NE.last $ levenbergMarquardt1WithYerrors scaleY 1 linearData
         assertEqual "params" 3.04015   (round' (fitParams fit))
@@ -159,11 +174,13 @@ lm1Tests = withData "linear.dat" $ \load -> testGroup "lm1"
         assertEqual "ndf"    19        (round' (fitNDF fit))
         assertEqual "wssr"   40.9918   (round' (fitWSSR fit))
 
+#if __GLASGOW_HASKELL__ >= 704
         assertEqual "P"      2.4195e-3 (round' (1 - S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)))
+#endif
 
     , testCase "xy-errors" $ do
         linearData <- load
-        let scaleXY a (x, y, dx, dy) = case AD.grad' scaleF (H2 a x) of
+        let scaleXY a (x, y, dx, dy) = case scaleGrad' (H2 a x) of
                 (f, H2 da f') -> (y, f, da, f', dx, dy)
         let fit = NE.last $ levenbergMarquardt1WithXYerrors scaleXY 1 linearData
         assertEqual "params" 3.04315   (round' (fitParams fit))
@@ -171,14 +188,16 @@ lm1Tests = withData "linear.dat" $ \load -> testGroup "lm1"
         assertEqual "ndf"    19        (round' (fitNDF fit))
         assertEqual "wssr"   30.7021   (round' (fitWSSR fit))
 
+#if __GLASGOW_HASKELL__ >= 704
         assertEqual "P"      4.3516e-2 (round' (1 - S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)))
+#endif
     ]
 
 lm2Tests :: TestTree
 lm2Tests = withData "linear.dat" $ \load -> testGroup "lm2"
     [ testCase "no-errors" $ do
         linearData <- load
-        let lin (V2 a b) (x, y, _, _) = case AD.grad' linearF (H3 a b x) of
+        let lin (V2 a b) (x, y, _, _) = case linearGrad' (H3 a b x) of
                 (f, H3 da db _) -> (y, f, V2 da db)
 
         let fit = NE.last $ levenbergMarquardt2 lin (V2 1 1) linearData
@@ -189,7 +208,7 @@ lm2Tests = withData "linear.dat" $ \load -> testGroup "lm2"
 
     , testCase "y-errors" $ do
         linearData <- load
-        let linY (V2 a b) (x, y, _, dy) = case AD.grad' linearF (H3 a b x) of
+        let linY (V2 a b) (x, y, _, dy) = case linearGrad' (H3 a b x) of
                 (f, H3 da db _) -> (y, f, V2 da db, dy)
         let fit = NE.last $ levenbergMarquardt2WithYerrors linY (V2 1 1) linearData
         assertEqual "params" (V2 2.97271 5.91882)  (round' (fitParams fit))
@@ -199,7 +218,7 @@ lm2Tests = withData "linear.dat" $ \load -> testGroup "lm2"
 
     , testCase "xy-errors" $ do
         linearData <- load
-        let linXY (V2 a b) (x, y, dx, dy) = case AD.grad' linearF (H3 a b x) of
+        let linXY (V2 a b) (x, y, dx, dy) = case linearGrad' (H3 a b x) of
                 (f, H3 da db f') -> (y, f, V2 da db, f', dx, dy)
         let fit = NE.last $ levenbergMarquardt2WithXYerrors linXY (V2 1 1) linearData
         assertEqual "params" (V2 2.97021 5.99061)   (round' (fitParams fit))
@@ -207,12 +226,14 @@ lm2Tests = withData "linear.dat" $ \load -> testGroup "lm2"
         assertEqual "ndf"    18                     (round' (fitNDF fit))
         assertEqual "wssr"   29.141                 (round' (fitWSSR fit))
 
+#if __GLASGOW_HASKELL__ >= 704
         assertEqual "P"      4.6683e-2              (round' (1 - S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)))
+#endif
 
     , testCase "yx-errors" $ do
         -- with x and y flipped:
         linearData <- load
-        let linYX (V2 a b) (y, x, dy, dx) = case AD.grad' linearF (H3 a b x) of
+        let linYX (V2 a b) (y, x, dy, dx) = case linearGrad' (H3 a b x) of
                 (f, H3 da db f') -> (y, f, V2 da db, f', dx, dy)
         let fit = NE.last $ levenbergMarquardt2WithXYerrors linYX (V2 1 1) linearData
         assertEqual "params" (V2 0.33402 (-1.92156)) (round' (fitParams fit))
@@ -220,8 +241,11 @@ lm2Tests = withData "linear.dat" $ \load -> testGroup "lm2"
         assertEqual "ndf"    18                      (round' (fitNDF fit))
         assertEqual "wssr"   29.1822                 (round' (fitWSSR fit))
 
+#if __GLASGOW_HASKELL__ >= 704
         assertEqual "P"      4.6197e-2               (round' (1 - S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)))
+#endif
 
+#if __GLASGOW_HASKELL__ >= 704
     , testCase "orear-example" $ do
         let orearData :: [(Double, Double, Double, Double)]
             orearData = zip4
@@ -252,6 +276,7 @@ lm2Tests = withData "linear.dat" $ \load -> testGroup "lm2"
         assertEqual "wssr"   2.18668                 (round' (fitWSSR fit))
 
         assertEqual "P"      0.53458                 (round' (1 - S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)))
+#endif
 
     ]
 
@@ -261,8 +286,22 @@ data H3 a = H3 a a a deriving (Functor, F.Foldable, T.Traversable)
 scaleF :: Num a => H2 a -> a
 scaleF (H2 a x) = a * x + 5
 
+scaleGrad' :: H2 Double -> (Double, H2 Double)
+#if __GLASGOW_HASKELL__ >= 704
+scaleGrad' = AD.grad' scaleF
+#else
+scaleGrad' (H2 a x) = (a * x + 5, H2 x a)
+#endif
+
 linearF :: Num a => H3 a -> a
 linearF (H3 a b x) = a * x + b
+
+linearGrad' :: H3 Double -> (Double, H3 Double)
+#if __GLASGOW_HASKELL__ >= 704
+linearGrad' = AD.grad' linearF
+#else
+linearGrad' (H3 a b x) = (a * x + b, H3 x 1 a)
+#endif
 
 orearF :: Fractional a => H3 a -> a
 orearF (H3 a b x) = a * x - b / x
