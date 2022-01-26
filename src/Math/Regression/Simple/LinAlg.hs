@@ -1,5 +1,6 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs                  #-}
+{-# LANGUAGE MultiParamTypeClasses  #-}
 -- | Minimil linear algebra lib.
 module Math.Regression.Simple.LinAlg (
     -- * Operations
