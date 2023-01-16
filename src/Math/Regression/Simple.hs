@@ -405,15 +405,16 @@ quadRegAccW f = F.foldl' (\acc a -> case f a of (x,y,w) -> addQuadRegW acc x y w
 --
 levenbergMarquardt1
     :: F.Foldable f
-    => (Double -> a -> (Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \partial_\beta f(\beta, x)\)
+    => (Double -> a -> (Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \partial_\beta f(\beta, x_i)\)
     -> Double                                     -- ^ initial parameter, \(\beta_0\)
     -> f a                                        -- ^ data, \(d\)
     -> NE.NonEmpty (Fit Double)                   -- ^ non-empty list of iteration results
 levenbergMarquardt1 f b0 xs = loop lambda0 b0 acc0 where
     acc0 = calcAcc b0
 
-    lambda0 = c11
+    lambda0 = sqrt (c11 / fromIntegral n)
       where
+        n   = lm1_n acc0
         c11 = getKBN $ lm1_c11 acc0
 
     calcAcc beta = F.foldl' (\acc p -> case f beta p of (y, g, d) -> addLM1Acc acc y g d) zeroLM1Acc xs
@@ -453,15 +454,16 @@ levenbergMarquardt1 f b0 xs = loop lambda0 b0 acc0 where
 -- | 'levenbergMarquardt1' with weights.
 levenbergMarquardt1WithWeights
     :: F.Foldable f
-    => (Double -> a -> (Double, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \partial_\beta f(\beta, x), w_i\)
+    => (Double -> a -> (Double, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \partial_\beta f(\beta, x_i), w_i\)
     -> Double                                             -- ^ initial parameter, \(\beta_0\)
     -> f a                                                -- ^ data, \(d\)
     -> NE.NonEmpty (Fit Double)                           -- ^ non-empty list of iteration results
 levenbergMarquardt1WithWeights f b0 xs = loop lambda0 b0 acc0 where
     acc0 = calcAcc b0
 
-    lambda0 = c11
+    lambda0 = sqrt (c11 / fromIntegral n)
       where
+        n   = lm1_n acc0
         c11 = getKBN $ lm1_c11 acc0
 
     calcAcc beta = F.foldl' (\acc p -> case f beta p of (y, g, d, w) -> addLM1AccW acc y g d w) zeroLM1Acc xs
@@ -501,7 +503,7 @@ levenbergMarquardt1WithWeights f b0 xs = loop lambda0 b0 acc0 where
 -- | 'levenbergMarquardt1' with Y-errors.
 levenbergMarquardt1WithYerrors
     :: F.Foldable f
-    => (Double -> a -> (Double, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \partial_\beta f(\beta, x), \delta y_i\)
+    => (Double -> a -> (Double, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \partial_\beta f(\beta, x_i), \delta y_i\)
     -> Double                                             -- ^ initial parameter, \(\beta_0\)
     -> f a                                                -- ^ data, \(d\)
     -> NE.NonEmpty (Fit Double)                           -- ^ non-empty list of iteration results
@@ -511,7 +513,7 @@ levenbergMarquardt1WithYerrors f = levenbergMarquardt1WithWeights f' where
 -- | 'levenbergMarquardt1' with XY-errors.
 levenbergMarquardt1WithXYerrors
     :: F.Foldable f
-    => (Double -> a -> (Double, Double, Double, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \partial_\beta f(\beta, x), \partial_x f(\beta, x), \delta x_i, \delta y_i\)
+    => (Double -> a -> (Double, Double, Double, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \partial_\beta f(\beta, x_i), \partial_x f(\beta, x_i), \delta x_i, \delta y_i\)
     -> Double                                                             -- ^ initial parameter, \(\beta_0\)
     -> f a                                                                -- ^ data, \(d\)
     -> NE.NonEmpty (Fit Double)                                           -- ^ non-empty list of iteration results
@@ -563,12 +565,10 @@ addLM1AccW LM1Acc {..} y f d1 w = LM1Acc
 --
 -- >>> PP $ levenbergMarquardt2 lin (V2 1 1) input2
 -- Fit (V2 1.00000 1.00000) (V2 1.0175 2.5385) 3 29.470
--- Fit (V2 1.0181 1.0368) (V2 0.98615 2.4602) 3 27.681
--- Fit (V2 1.1557 1.2988) (V2 0.75758 1.8900) 3 16.336
--- Fit (V2 1.5463 1.6577) (V2 0.29278 0.73043) 3 2.4400
--- Fit (V2 1.9129 1.1096) (V2 0.11033 0.27524) 3 0.34645
--- Fit (V2 2.0036 0.89372) (V2 0.09552 0.23830) 3 0.25970
--- Fit (V2 2.0063 0.88687) (V2 0.09550 0.23826) 3 0.25962
+-- Fit (V2 1.2782 1.4831) (V2 0.57784 1.4416) 3 9.5041
+-- Fit (V2 1.7254 1.4730) (V2 0.18820 0.46952) 3 1.0082
+-- Fit (V2 1.9796 0.95226) (V2 0.09683 0.24157) 3 0.26687
+-- Fit (V2 2.0060 0.88759) (V2 0.09550 0.23826) 3 0.25962
 -- Fit (V2 2.0063 0.88685) (V2 0.09550 0.23826) 3 0.25962
 --
 -- This is the same result what 'linearFit' returns:
@@ -595,12 +595,10 @@ addLM1AccW LM1Acc {..} y f d1 w = LM1Acc
 -- >>> let lin' (V2 a b) (x, y) = case AD.grad' linearF (H3 a b x) of (f, H3 da db _f') -> (y, f, V2 da db)
 -- >>> PP $ levenbergMarquardt2 lin' (V2 1 1) input2
 -- Fit (V2 1.00000 1.00000) (V2 1.0175 2.5385) 3 29.470
--- Fit (V2 1.0181 1.0368) (V2 0.98615 2.4602) 3 27.681
--- Fit (V2 1.1557 1.2988) (V2 0.75758 1.8900) 3 16.336
--- Fit (V2 1.5463 1.6577) (V2 0.29278 0.73043) 3 2.4400
--- Fit (V2 1.9129 1.1096) (V2 0.11033 0.27524) 3 0.34645
--- Fit (V2 2.0036 0.89372) (V2 0.09552 0.23830) 3 0.25970
--- Fit (V2 2.0063 0.88687) (V2 0.09550 0.23826) 3 0.25962
+-- Fit (V2 1.2782 1.4831) (V2 0.57784 1.4416) 3 9.5041
+-- Fit (V2 1.7254 1.4730) (V2 0.18820 0.46952) 3 1.0082
+-- Fit (V2 1.9796 0.95226) (V2 0.09683 0.24157) 3 0.26687
+-- Fit (V2 2.0060 0.88759) (V2 0.09550 0.23826) 3 0.25962
 -- Fit (V2 2.0063 0.88685) (V2 0.09550 0.23826) 3 0.25962
 --
 -- == Non-polynomial example
@@ -613,13 +611,12 @@ addLM1AccW LM1Acc {..} y f d1 w = LM1Acc
 -- >>> let input = zip [0.038,0.194,0.425,0.626,1.253,2.500,3.740] [0.050,0.127,0.094,0.2122,0.2729,0.2665,0.3317]
 -- >>> PP $ levenbergMarquardt2 rateF' (V2 0.9 0.2) input
 -- Fit (V2 0.90000 0.20000) (V2 0.43304 0.43936) 5 1.4455
--- Fit (V2 0.83306 0.25278) (V2 0.39164 0.49729) 5 1.0055
--- Fit (V2 0.59437 0.43508) (V2 0.21158 0.53403) 5 0.18832
--- Fit (V2 0.39687 0.56324) (V2 0.05723 0.25666) 5 0.01062
--- Fit (V2 0.36289 0.56104) (V2 0.04908 0.24007) 5 0.00784
--- Fit (V2 0.36190 0.55662) (V2 0.04887 0.23843) 5 0.00784
--- Fit (V2 0.36184 0.55629) (V2 0.04885 0.23830) 5 0.00784
--- Fit (V2 0.36184 0.55627) (V2 0.04885 0.23829) 5 0.00784
+-- Fit (V2 0.61786 0.36360) (V2 0.23270 0.50259) 5 0.26730
+-- Fit (V2 0.39270 0.49787) (V2 0.05789 0.24170) 5 0.01237
+-- Fit (V2 0.36121 0.54525) (V2 0.04835 0.23315) 5 0.00785
+-- Fit (V2 0.36168 0.55530) (V2 0.04880 0.23790) 5 0.00784
+-- Fit (V2 0.36182 0.55620) (V2 0.04885 0.23826) 5 0.00784
+-- Fit (V2 0.36184 0.55626) (V2 0.04885 0.23829) 5 0.00784
 --
 -- We get the same result as in the article: 0.362 and 0.556
 --
@@ -628,7 +625,7 @@ addLM1AccW LM1Acc {..} y f d1 w = LM1Acc
 --
 levenbergMarquardt2
     :: F.Foldable f
-    => (V2 -> a -> (Double, Double, V2))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x)\)
+    => (V2 -> a -> (Double, Double, V2))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x_i)\)
     -> V2                                 -- ^ initial parameters, \(\beta_0\)
     -> f a                                -- ^ data, \(d\)
     -> NE.NonEmpty (Fit V2)               -- ^ non-empty list of iteration results
@@ -637,11 +634,10 @@ levenbergMarquardt2 f b0 xs = loop lambda0 b0 acc0 where
 
     calcAcc beta = F.foldl' (\acc p -> case f beta p of (y, g, d) -> addLM2Acc acc y g d) zeroLM2Acc xs
 
-    lambda0 = max l1 l2
+    lambda0 = sqrt $ (c11 + c22) / fromIntegral n / 2
       where
-        V2 l1 l2 = eigenSM22 c11 c12 c22
+        n   = lm2_n acc0
         c11 = getKBN $ lm2_c11 acc0
-        c12 = getKBN $ lm2_c11 acc0
         c22 = getKBN $ lm2_c22 acc0
 
     loop lambda beta acc
@@ -688,18 +684,17 @@ levenbergMarquardt2 f b0 xs = loop lambda0 b0 acc0 where
 --
 levenbergMarquardt2WithWeights
     :: F.Foldable f
-    => (V2 -> a -> (Double, Double, V2, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x), w_i\)
+    => (V2 -> a -> (Double, Double, V2, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x_i), w_i\)
     -> V2                                         -- ^ initial parameters, \(\beta_0\)
     -> f a                                        -- ^ data, \(d\)
     -> NE.NonEmpty (Fit V2)                       -- ^ non-empty list of iteration results
 levenbergMarquardt2WithWeights f b0 xs = loop lambda0 b0 acc0 where
     acc0 = calcAcc b0
 
-    lambda0 = max l1 l2
+    lambda0 = sqrt $ (c11 + c22) / fromIntegral n / 2
       where
-        V2 l1 l2 = eigenSM22 c11 c12 c22
+        n   = lm2_n acc0
         c11 = getKBN $ lm2_c11 acc0
-        c12 = getKBN $ lm2_c11 acc0
         c22 = getKBN $ lm2_c22 acc0
 
     calcAcc beta = F.foldl' (\acc p -> case f beta p of (y, g, d, w) -> addLM2AccW acc y g d w) zeroLM2Acc xs
@@ -743,7 +738,7 @@ levenbergMarquardt2WithWeights f b0 xs = loop lambda0 b0 acc0 where
 -- | 'levenbergMarquardt2' with Y-errors.
 levenbergMarquardt2WithYerrors
     :: F.Foldable f
-    => (V2 -> a -> (Double, Double, V2, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x), \delta y_i\)
+    => (V2 -> a -> (Double, Double, V2, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x_i), \delta y_i\)
     -> V2                                         -- ^ initial parameters, \(\beta_0\)
     -> f a                                        -- ^ data, \(d\)
     -> NE.NonEmpty (Fit V2)                       -- ^ non-empty list of iteration results
@@ -753,7 +748,7 @@ levenbergMarquardt2WithYerrors f = levenbergMarquardt2WithWeights f' where
 -- | 'levenbergMarquardt2' with XY-errors.
 levenbergMarquardt2WithXYerrors
     :: F.Foldable f
-    => (V2 -> a -> (Double, Double, V2, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x), \partial_x f(\beta, x), \delta x_i, \delta y_i\)
+    => (V2 -> a -> (Double, Double, V2, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x_i), \partial_x f(\beta, x_i), \delta x_i, \delta y_i\)
     -> V2                                                         -- ^ initial parameters, \(\beta_0\)
     -> f a                                                        -- ^ data, \(d\)
     -> NE.NonEmpty (Fit V2)                                       -- ^ non-empty list of iteration results
@@ -810,7 +805,7 @@ addLM2AccW LM2Acc {..} y f (V2 d1 d2) w = LM2Acc
 --
 -- >>> let quad (V3 a b c) (x, y) = (y, a * x * x + b * x + c, V3 (x * x) x 1)
 -- >>> PP $ NE.last $ levenbergMarquardt3 quad (V3 2 2 2) input3
--- Fit (V3 1.00000 0.00000 2.0000) (V3 0.00000 0.00000 0.00000) 1 0.00000
+-- Fit (V3 1.00000 (-0.00000) 2.0000) (V3 0.00000 0.00000 0.00000) 1 0.00000
 --
 -- Same as quadratic fit, just less direct:
 --
@@ -819,7 +814,7 @@ addLM2AccW LM2Acc {..} y f (V2 d1 d2) w = LM2Acc
 --
 levenbergMarquardt3
     :: F.Foldable f
-    => (V3 -> a -> (Double, Double, V3))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x)\)
+    => (V3 -> a -> (Double, Double, V3))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x_i)\)
     -> V3                                 -- ^ initial parameters, \(\beta_0\)
     -> f a                                -- ^ data, \(d\)
     -> NE.NonEmpty (Fit V3)               -- ^ non-empty list of iteration results
@@ -828,17 +823,11 @@ levenbergMarquardt3 f b0 xs = loop lambda0 b0 acc0 where
 
     calcAcc beta = F.foldl' (\acc p -> case f beta p of (y, g, d) -> addLM3Acc acc y g d) zeroLM3Acc xs
 
-    -- frobenius norm is larger than largest eigen value.
-    -- calculating the eigen values for 3x3 (symmetric) matrix is becoming complicated.
-    lambda0 = sqrt $ sumKBN [ sq c11
-                            , 2 * sq c12, sq c22
-                            , 2 * sq c13, 2 * sq c23, sq c33]
+    lambda0 = sqrt $ (c11 + c22 + c33) / fromIntegral n / 3
       where
+        n   = lm3_n acc0
         c11 = getKBN $ lm3_c11 acc0
-        c12 = getKBN $ lm3_c12 acc0
-        c13 = getKBN $ lm3_c13 acc0
         c22 = getKBN $ lm3_c22 acc0
-        c23 = getKBN $ lm3_c23 acc0
         c33 = getKBN $ lm3_c33 acc0
 
     loop lambda beta acc
@@ -891,22 +880,18 @@ levenbergMarquardt3 f b0 xs = loop lambda0 b0 acc0 where
 -- | 'levenbergMarquardt3' with weights.
 levenbergMarquardt3WithWeights
     :: F.Foldable f
-    => (V3 -> a -> (Double, Double, V3, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x), w_i\)
+    => (V3 -> a -> (Double, Double, V3, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x_i), w_i\)
     -> V3                                         -- ^ initial parameters, \(\beta_0\)
     -> f a                                        -- ^ data, \(d\)
     -> NE.NonEmpty (Fit V3)                       -- ^ non-empty list of iteration results
 levenbergMarquardt3WithWeights f b0 xs = loop lambda0 b0 acc0 where
     acc0 = calcAcc b0
 
-    lambda0 = sqrt $ sumKBN [ sq c11
-                            , 2 * sq c12, sq c22
-                            , 2 * sq c13, 2 * sq c23, sq c33]
+    lambda0 = sqrt $ (c11 + c22 + c33) / fromIntegral n / 3
       where
+        n   = lm3_n acc0
         c11 = getKBN $ lm3_c11 acc0
-        c12 = getKBN $ lm3_c12 acc0
-        c13 = getKBN $ lm3_c13 acc0
         c22 = getKBN $ lm3_c22 acc0
-        c23 = getKBN $ lm3_c23 acc0
         c33 = getKBN $ lm3_c33 acc0
 
     calcAcc beta = F.foldl' (\acc p -> case f beta p of (y, g, d, w) -> addLM3AccW acc y g d w) zeroLM3Acc xs
@@ -957,7 +942,7 @@ levenbergMarquardt3WithWeights f b0 xs = loop lambda0 b0 acc0 where
 -- | 'levenbergMarquardt3' with Y-errors.
 levenbergMarquardt3WithYerrors
     :: F.Foldable f
-    => (V3 -> a -> (Double, Double, V3, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x), \delta y_i\)
+    => (V3 -> a -> (Double, Double, V3, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x_i), \delta y_i\)
     -> V3                                         -- ^ initial parameters, \(\beta_0\)
     -> f a                                        -- ^ data, \(d\)
     -> NE.NonEmpty (Fit V3)                       -- ^ non-empty list of iteration results
@@ -967,7 +952,7 @@ levenbergMarquardt3WithYerrors f = levenbergMarquardt3WithWeights f' where
 -- | 'levenbergMarquardt3' with XY-errors.
 levenbergMarquardt3WithXYerrors
     :: F.Foldable f
-    => (V3 -> a -> (Double, Double, V3, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x), \partial_x f(\beta, x), \delta x_i, \delta y_i\)
+    => (V3 -> a -> (Double, Double, V3, Double, Double, Double))  -- ^ \(\beta, d_i \mapsto y_i, f(\beta, x_i), \nabla_\beta f(\beta, x_i), \partial_x f(\beta, x_i), \delta x_i, \delta y_i\)
     -> V3                                                         -- ^ initial parameters, \(\beta_0\)
     -> f a                                                        -- ^ data, \(d\)
     -> NE.NonEmpty (Fit V3)                                       -- ^ non-empty list of iteration results
@@ -1192,12 +1177,6 @@ sq x = x * x
 
 iterate1 :: (b -> b) -> b -> NE.NonEmpty b
 iterate1 g x = NE.cons x (iterate1 g (g x))
-
-eigenSM22 :: Double -> Double -> Double -> V2
-eigenSM22 a b c = V2 ((ac + discr) / 2) ((ac - discr) / 2)
-  where
-    ac = a + c
-    discr = sqrt (sq (a - c) + 4 * sq b)
 
 -- | Levenberg-Marquard stop condition
 lmStop :: Double -> Double -> Double -> Bool
