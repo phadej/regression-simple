@@ -159,7 +159,7 @@ lm1Tests = withData "linear.dat" $ \load -> testGroup "lm1"
                 (f, H2 da _) -> (y, f, da)
 
         let fit = NE.last $ levenbergMarquardt1 scale 1 linearData
-        assertEqual "params" 3.03374   (round' (fitParams fit))
+        assertEqual "params" 3.03373   (round' (fitParams fit))
         assertEqual "errors" 3.8628e-2 (round' (fitErrors fit))
         assertEqual "ndf"    19        (round' (fitNDF fit))
         assertEqual "wssr"   80.7105   (round' (fitWSSR fit))
@@ -191,6 +191,16 @@ lm1Tests = withData "linear.dat" $ \load -> testGroup "lm1"
 #if __GLASGOW_HASKELL__ >= 704
         assertEqual "P"      4.3516e-2 (round' (1 - S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)))
 #endif
+
+    , testCase "issue-8" $ do
+        let dat = [(1e5,1e6),(1e6,1e7)] :: [(Double, Double)]
+        let func a (x, y) = (y, a * x * log x, x * log x)
+
+        let fit = NE.last $ levenbergMarquardt1 func 1.0 dat
+        assertEqual "params" 0.72482   (round' (fitParams fit))
+        assertEqual "errors" 1.1981e-2 (round' (fitErrors fit))
+        assertEqual "ndf"    1         (round' (fitNDF fit))
+        assertEqual "wssr"   2.75862e10 (round' (fitWSSR fit))
     ]
 
 lm2Tests :: TestTree
@@ -211,7 +221,7 @@ lm2Tests = withData "linear.dat" $ \load -> testGroup "lm2"
         let linY (V2 a b) (x, y, _, dy) = case linearGrad' (H3 a b x) of
                 (f, H3 da db _) -> (y, f, V2 da db, dy)
         let fit = NE.last $ levenbergMarquardt2WithYerrors linY (V2 1 1) linearData
-        assertEqual "params" (V2 2.97271 5.91882)  (round' (fitParams fit))
+        assertEqual "params" (V2 2.97271 5.91878)  (round' (fitParams fit))
         assertEqual "errors" (V2 7.722e-2 0.91882) (round' (fitErrors fit))
         assertEqual "ndf"    18                    (round' (fitNDF fit))
         assertEqual "wssr"   38.8345               (round' (fitWSSR fit))
@@ -236,13 +246,13 @@ lm2Tests = withData "linear.dat" $ \load -> testGroup "lm2"
         let linYX (V2 a b) (y, x, dy, dx) = case linearGrad' (H3 a b x) of
                 (f, H3 da db f') -> (y, f, V2 da db, f', dx, dy)
         let fit = NE.last $ levenbergMarquardt2WithXYerrors linYX (V2 1 1) linearData
-        assertEqual "params" (V2 0.33402 (-1.92156)) (round' (fitParams fit))
-        assertEqual "errors" (V2 8.5785e-3 0.3488)   (round' (fitErrors fit))
+        assertEqual "params" (V2 0.3334 (-1.8971)) (round' (fitParams fit))
+        assertEqual "errors" (V2 8.5742e-3 0.34862)  (round' (fitErrors fit))
         assertEqual "ndf"    18                      (round' (fitNDF fit))
-        assertEqual "wssr"   29.1822                 (round' (fitWSSR fit))
+        assertEqual "wssr"   29.2361                 (round' (fitWSSR fit))
 
 #if __GLASGOW_HASKELL__ >= 704
-        assertEqual "P"      4.6197e-2               (round' (1 - S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)))
+        assertEqual "P"      4.5568e-2               (round' (1 - S.cumulative (S.chiSquared (fitNDF fit)) (fitWSSR fit)))
 #endif
 
 #if __GLASGOW_HASKELL__ >= 704
@@ -318,10 +328,11 @@ class Round a where
 
 instance Round Double where
     round' 0 = 0
-    round' x = fromInteger (round (x * rat)) / rat
+    round' x
+        | mag > 5   = let rat = 10 ^ (mag - 5) in fromInteger (round (x / rat)) * rat
+        | otherwise = let rat = 10 ^ (5 - mag) in fromInteger (round (x * rat)) / rat
       where
         mag = truncate (logBase 10 (abs x)) :: Int
-        rat = 10 ^ (5 - mag)
 
 instance Round Int where
     round' = id
