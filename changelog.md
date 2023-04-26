@@ -1,3 +1,8 @@
+# 0.2.1
+
+* Better lambda0 guesses, hopefully
+* Support GHC-9.6
+
 # 0.2
 
 Large refactoring:
