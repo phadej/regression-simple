@@ -1,3 +1,7 @@
+# 0.2.2
+
+* Support GHC 8.6.5...9.12
+
 # 0.2.1
 
 * Better lambda0 guesses, hopefully
