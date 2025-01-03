@@ -238,7 +238,7 @@ jobs:
           find .
       - name: tests
         run: |
-          $CABAL v2-test $ARG_COMPILER $ARG_TESTS $ARG_BENCH all --test-show-details=direct
+          $CABAL v2-test -v $ARG_COMPILER $ARG_TESTS $ARG_BENCH all --test-show-details=direct
       - name: docspec
         run: |
           $CABAL v2-build $ARG_COMPILER $ARG_TESTS $ARG_BENCH all
