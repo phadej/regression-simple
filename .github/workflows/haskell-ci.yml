@@ -234,6 +234,7 @@ jobs:
           $CABAL v2-build $ARG_COMPILER $ARG_TESTS $ARG_BENCH all --write-ghc-environment-files=always
       - name: WAT
         run: |
+          pwd
           find .
       - name: tests
         run: |
