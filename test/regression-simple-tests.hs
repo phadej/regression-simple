@@ -28,7 +28,7 @@ import Numeric.KBN            (sumKBN)
 
 main :: IO ()
 main = do
-  getCurrentDirectory >>= print
+  getCurrentDirectory >>= prin
   defaultMain $ testGroup "regression-simple"
     [ linearTests
     , quadraticTests
