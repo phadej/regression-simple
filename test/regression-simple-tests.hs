@@ -7,6 +7,7 @@ module Main (main) where
 import Data.List        (zip4)
 import Test.Tasty       (TestTree, defaultMain, testGroup, withResource)
 import Test.Tasty.HUnit (assertEqual, testCase)
+import System.Directory
 
 import qualified Data.Foldable                      as F
 import qualified Data.List.NonEmpty                 as NE
@@ -26,7 +27,9 @@ import Numeric.KBN            (sumKBN)
 -------------------------------------------------------------------------------
 
 main :: IO ()
-main = defaultMain $ testGroup "regression-simple"
+main = do
+  getCurrentDirectory >>= print
+  defaultMain $ testGroup "regression-simple"
     [ linearTests
     , quadraticTests
     , lm1Tests

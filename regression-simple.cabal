@@ -76,6 +76,7 @@ test-suite regression-simple-tests
     , regression-simple
 
   build-depends:
+    , directory
     , tasty           ^>=1.5
     , tasty-hunit     ^>=0.10.0.3
 
