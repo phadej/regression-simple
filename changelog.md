@@ -1,3 +1,9 @@
+# 0.2.2
+
+* Support GHC-9.14
+* Drop support for GHCs prior 9.2
+* Update dependencies (also lower bounds)
+
 # 0.2.1
 
 * Better lambda0 guesses, hopefully
