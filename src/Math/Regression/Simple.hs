@@ -21,6 +21,9 @@
 -- Package has been tested to return similar results as @fit@ functionality in @gnuplot@
 -- (L-M doesn't always converge to exactly the same points in parameter space).
 --
+-- Functions in this module which are polymorphic over 'Foldable' use strict 'F.foldl''.
+-- This works well for ordinary lists and vectors, but might be sub-optimal for some other foldables.
+--
 module Math.Regression.Simple (
     -- * Linear regression
     linear,
@@ -133,6 +136,14 @@ import Numeric.KBN
 -- >>> let input2 = [(0.1, 1.2), (1.3, 3.1), (1.9, 4.9), (3.0, 7.1), (4.1, 9.0)]
 -- >>> PP $ linear id input2
 -- V2 2.0063 0.88685
+--
+-- 'linear' (and other functions in this module) are susceptible to [catastropic cancellation](https://en.wikipedia.org/wiki/Catastrophic_cancellation),
+-- I haven't yet experienced this in practice. If you do, please open an issue.
+--
+-- >>> let input2 = map (\(x,y) -> (x + 1e8, y + 1e8)) [(0.1, 1.2), (1.3, 3.1), (1.9, 4.9), (3.0, 7.1), (4.1, 9.0)]
+-- >>> PP $ linear id input2
+-- V2 1.5000 (-67108864)
+--
 --
 linear :: F.Foldable f => (a -> (Double, Double)) -> f a -> V2
 linear f = fitParams . linearFit f
